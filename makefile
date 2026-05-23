@@ -1,11 +1,10 @@
-DOCKER_RUN := docker run --rm -v "$(CURDIR):/bobsim" openmodelica/openmodelica:v1.26.3-ompython
-PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf ".venv/bin/python"; else printf "python3"; fi)
-VEHICLE_YAML_SRC := vehicle.yml
-VEHICLE_YAML_DST := _0_Utils/external/BobLib/Generation/vehicle.yml
+IMAGE     := bobsim
+DOCKER_RUN := docker run --rm -v "$(CURDIR):/workspace" -e PYTHONPATH=/workspace $(IMAGE)
 
-.PHONY: init setup rebuild shell-doe shell-standard sim-doe sim-transient \
-	sync-vehicle-yaml build-records build-axle-models build-vehicle-sim build-standard build-four-post \
-	steady-state-eval transient-eval four-post-eval clean-doe clean
+.PHONY: init setup rebuild \
+        shell shell-doe \
+        sim-doe sim-steady-state sim-transient sim-four-post \
+        clean-doe clean-standard clean
 
 # ── Setup ──────────────────────────────────────────────────────────────────
 
@@ -13,92 +12,72 @@ init:
 	git submodule update --init --recursive
 
 setup:
-	docker compose build
+	docker build -t $(IMAGE) .
 
 rebuild:
-	docker compose build --no-cache
+	docker build --no-cache -t $(IMAGE) .
 
 # ── Shells ─────────────────────────────────────────────────────────────────
 
-shell-bobsim:
-	docker compose run --rm bobsim bash
+shell:
+	docker run --rm -it -v "$(CURDIR):/workspace" -e PYTHONPATH=/workspace $(IMAGE) bash
 
 shell-doe:
-	docker compose run --rm doe bash
+	docker run --rm -it -v "$(CURDIR):/workspace" -e PYTHONPATH=/workspace -w /workspace/_4_OptSim $(IMAGE) bash
 
 # ── Sims ───────────────────────────────────────────────────────────────────
+# All sims run fully inside Docker — no local OMC or Python install needed.
+# Build is skipped if the executable already exists; run make clean-standard to force rebuild.
 
 sim-doe:
-	docker compose run --rm doe python run_doe.py
+	docker run --rm -v "$(CURDIR):/workspace" -e PYTHONPATH=/workspace -w /workspace/_4_OptSim $(IMAGE) python run_doe.py
+
+sim-steady-state:
+	$(DOCKER_RUN) bash -c "\
+		if [ ! -f _3_StandardSim/Build/VehicleSim/BobLib.Standards.VehicleSim ]; then \
+		    omc /workspace/_3_StandardSim/build_vehicle_sim.mos && \
+		    [ -f _3_StandardSim/Build/VehicleSim/BobLib.Standards.VehicleSim ] || \
+		        { echo 'ERROR: OMC build failed - executable not produced'; exit 1; }; \
+		fi && \
+		python -m _3_StandardSim.SteadyStateEval.steady_state_eval_sim"
+
+sim-transient:
+	$(DOCKER_RUN) bash -c "\
+		if [ ! -f _3_StandardSim/Build/VehicleSim/BobLib.Standards.VehicleSim ]; then \
+		    omc /workspace/_3_StandardSim/build_vehicle_sim.mos && \
+		    [ -f _3_StandardSim/Build/VehicleSim/BobLib.Standards.VehicleSim ] || \
+		        { echo 'ERROR: OMC build failed - executable not produced'; exit 1; }; \
+		fi && \
+		python -m _3_StandardSim.TransientEval.transient_eval_sim"
+
+sim-four-post:
+	$(DOCKER_RUN) bash -c "\
+		if [ ! -f _3_StandardSim/Build/FourPostSim/BobLib.Standards.FourPostSim ]; then \
+		    omc /workspace/_3_StandardSim/build_four_post_sim.mos && \
+		    [ -f _3_StandardSim/Build/FourPostSim/BobLib.Standards.FourPostSim ] || \
+		        { echo 'ERROR: OMC build failed - executable not produced'; exit 1; }; \
+		fi && \
+		python -m _3_StandardSim.FourPostEval.four_post_eval_sim"
 
 # ── Clean ──────────────────────────────────────────────────────────────────
-# Uses docker run directly (not compose) to avoid Windows TTY hang.
 # compile_error_*.log files are preserved for debugging.
 
 clean-doe:
 	$(DOCKER_RUN) bash -c "\
-		find /bobsim/_4_OptSim/population -mindepth 1 ! -name '.gitkeep' -delete && \
-		find /bobsim/_4_OptSim/results    -mindepth 1 ! -name '.gitkeep' -delete"
+		find /workspace/_4_OptSim/population -mindepth 1 ! -name '.gitkeep' -delete && \
+		find /workspace/_4_OptSim/results    -mindepth 1 ! -name '.gitkeep' -delete"
+
+clean-standard:
+	$(DOCKER_RUN) bash -c "\
+		find /workspace/_3_StandardSim/Build   -mindepth 1 ! -name '.gitkeep' -delete ; \
+		find /workspace/_3_StandardSim/results -mindepth 1 ! -name '.gitkeep' -delete"
 
 clean:
-	# Python caches
-	find . -type d -name "__pycache__" -exec rm -rf {} +
-	find . -type f -name "*.pyc" -delete
-	find . -type f -name "*.pyo" -delete
-
-	# Test / coverage
-	rm -rf .pytest_cache .mypy_cache .ruff_cache
-	rm -rf .coverage htmlcov
-
-	# Build artifacts
-	rm -rf build dist *.egg-info
-
-	# Modelica / sim outputs
-	rm -rf results
-	find . -type f -name "*.csv" -delete
-	find . -type f -name "*.mat" -delete
-	find . -type f -name "*.log" -delete
-
-	# OpenModelica temp junk (very helpful)
-	rm -rf ~/.openmodelica/tmp/* 2>/dev/null || true
-
-	@echo "Clean complete"
-
-clean-build:
-	@echo "Cleaning all build directories under _3_StandardSim..."
-	@find _3_StandardSim -type d -name "Build" -exec sh -c 'rm -rf "$$1"/* "$$1"/.[!.]* "$$1"/..?*' _ {} \;
-
-clean-results:
-	@echo "Cleaning all result directories under _3_StandardSim..."
-	@find _3_StandardSim -type d -name "results" -exec sh -c 'rm -rf "$$1"/* "$$1"/.[!.]* "$$1"/..?*' _ {} \;
-
-sync-vehicle-yaml:
-	@mkdir -p $(dir $(VEHICLE_YAML_DST))
-	cp "$(VEHICLE_YAML_SRC)" "$(VEHICLE_YAML_DST)"
-
-build-vehicle-sim: sync-vehicle-yaml
-	$(PYTHON) _0_Utils/external/BobLib/Generation/scripts/build_vehicle_sim.py
-	omc _3_StandardSim/build_vehicle_sim.mos
-
-build-axle-models: sync-vehicle-yaml
-	$(PYTHON) _0_Utils/external/BobLib/Generation/scripts/build_axle_models.py
-
-build-records: sync-vehicle-yaml
-	$(PYTHON) _0_Utils/external/BobLib/Generation/scripts/build_records.py
-
-build-standard: sync-vehicle-yaml build-vehicle-sim
-
-steady-state-eval:
-	$(PYTHON) -m _3_StandardSim.SteadyStateEval.steady_state_eval_sim
-
-transient-eval:
-	$(PYTHON) -m _3_StandardSim.TransientEval.transient_eval_sim
-
-build-four-post-sim: sync-vehicle-yaml
-	$(PYTHON) _0_Utils/external/BobLib/Generation/scripts/build_four_post_sim.py
-	omc _3_StandardSim/build_four_post_sim.mos
-
-build-four-post: sync-vehicle-yaml build-four-post-sim
-
-four-post-eval:
-	$(PYTHON) -m _3_StandardSim.FourPostEval.four_post_eval_sim
+	$(DOCKER_RUN) bash -c "\
+		find /workspace -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null; \
+		find /workspace -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete 2>/dev/null; \
+		rm -rf /workspace/.pytest_cache /workspace/.mypy_cache /workspace/.ruff_cache; \
+		rm -rf /workspace/.coverage /workspace/htmlcov; \
+		rm -rf /workspace/build /workspace/dist; \
+		find /workspace -maxdepth 2 -name '*.egg-info' -exec rm -rf {} + 2>/dev/null; \
+		echo 'Clean complete'"

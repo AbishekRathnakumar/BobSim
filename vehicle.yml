@@ -6,7 +6,7 @@ architecture:
   front: bellcrank_stabar
   rear: bellcrank_stabar
 paths:
-  boblib: _0_Utils/external/BobLib/BobLib
+  boblib: _0_Utils/external/BobLib
   vehicle_templates: _0_Utils/external/BobLib/Generation/vehicle_templates
   tire_templates: _0_Utils/external/BobLib/Generation/tire_templates
 sprung_mass:
