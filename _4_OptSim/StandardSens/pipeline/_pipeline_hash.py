@@ -1,9 +1,9 @@
 """pipeline_hash.py — Track pipeline state to detect stale artifacts.
 
 Computes a hash of all inputs that affect compiled executables:
-  - _doe_config.yaml       (derived DOE sweep config)
-  - vehicle_architecture.yaml (source-of-truth template + sweep selection)
-  - compiler_config.yaml   (solver, tolerance, intervals)
+  - StandardSens/configs/_doe_config.yaml
+  - StandardSens/configs/vehicle_architecture.yaml
+  - StandardSens/configs/compiler_config.yaml
   - SteadyStateEval wrapper/config inputs
   - BobLib submodule SHA   (upstream model changes)
 
@@ -125,11 +125,11 @@ def check_pipeline_hash(
         raise RuntimeError(
             "\nPipeline inputs have changed since last compilation.\n"
             "Compiled artifacts are stale and cannot be reused.\n"
-            "Run 'make clean-population' then rerun the pipeline.\n\n"
+            "Run 'make clean-opt' then rerun the pipeline.\n\n"
             "Changes detected in one or more of:\n"
-            "  - configs/_doe_config.yaml\n"
-            "  - configs/vehicle_architecture.yaml\n"
-            "  - configs/compiler_config.yaml\n"
+            "  - StandardSens/configs/_doe_config.yaml\n"
+            "  - StandardSens/configs/vehicle_architecture.yaml\n"
+            "  - StandardSens/configs/compiler_config.yaml\n"
             "  - _3_StandardSim/SteadyStateEval/steady_state_eval_sim.py\n"
             "  - _3_StandardSim/SteadyStateEval/steady_state_eval_config.yml\n"
             "  - _3_StandardSim/_modelica_runner.py\n"

@@ -11,7 +11,7 @@ Extraction strategy:
 Metric columns are prefixed with the standard name e.g. SteadyStateEval_ay_min
 so multiple standards can coexist in the same parquet table.
 
-Output: results/doe_results.parquet
+Output: _4_OptSim/Build/StandardSens/standard_sensitivity_results.parquet
   Columns: [variant, <input params>, <standard_metric>, ...]
 
 To add a metric:   add one line under the standard in aggregator_config.yaml
@@ -27,17 +27,18 @@ from typing import Any, cast
 import pandas as pd
 import yaml
 
-from pipeline.sampler import sample
+from StandardSens.pipeline.sampler import sample
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
-ROOT = Path(__file__).resolve().parent.parent
-DOE_CONFIG = ROOT / "configs/_doe_config.yaml"
-AGGREGATOR_CONFIG = ROOT / "configs/aggregator_config.yaml"
-POPULATION_DIR = ROOT / "population"
-OUTPUT_PATH = ROOT / "results/doe_results.parquet"
+STANDARD_DIR = Path(__file__).resolve().parents[1]
+OPTSIM_DIR = STANDARD_DIR.parent
+DOE_CONFIG = STANDARD_DIR / "configs/_doe_config.yaml"
+AGGREGATOR_CONFIG = STANDARD_DIR / "configs/aggregator_config.yaml"
+POPULATION_DIR = OPTSIM_DIR / "Build/StandardSens/population"
+OUTPUT_PATH = OPTSIM_DIR / "Build/StandardSens/standard_sensitivity_results.parquet"
 
 
 def load_aggregator_config(config_path: Path = AGGREGATOR_CONFIG) -> dict:

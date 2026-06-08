@@ -1,164 +1,126 @@
 # BobSim
 
-BobSim is the Python orchestration layer for BobDyn. It builds BobLib-based
-vehicle simulations, runs standard studies, extracts signals, computes metrics,
-generates reports, and supports design-of-experiments sweeps.
+BobSim is the BobDyn high-fidelity vehicle analysis workspace. It wraps the
+BobLib Modelica vehicle models with repeatable Python workflows for standard
+vehicle dynamics studies, envelope calculations, sensitivity workflows,
+post-processing, and report generation.
 
-BobLib lives in this repository as a git submodule under
-`_0_Utils/external/BobLib/`, with the Modelica package itself in
-`_0_Utils/external/BobLib/BobLib/` and the editable generation workspace in
-`_0_Utils/external/BobLib/Generation/` (`vehicle_templates/`, `tire_templates/`,
-and `scripts/`). The active vehicle configuration is
-`_0_Utils/external/BobLib/Generation/vehicle.yml`, and `make sync-vehicle-yaml`
-refreshes it from the repo-root `vehicle.yml`.
+The full documentation lives at:
+
+https://bobdyn.com
+
+Use the BobDyn documentation site as the detailed source of truth. This README is
+the quick release guide for getting a clean checkout running and checking that it
+is healthy.
 
 ## Repository Layout
 
-- `_0_Utils/` - shared plotting, reporting, and utility code
-- `_1_VisualSim/` - visualization templates and MP4 rendering
-- `_2_EnvelopeSim/` - first-principles envelope tools such as GGV and YMD
-- `_3_StandardSim/` - standard maneuver runners and report generation
-- `_4_OptSim/` - architecture-driven DOE / exploration pipeline
-
-## What BobSim Does
-
-BobSim follows a simple pipeline:
-
-1. Select a vehicle or test configuration from human-readable YAML / Modelica
-2. Generate case inputs or DOE variants
-3. Compile Modelica into a runnable executable
-4. Run the simulation or study
-5. Extract signals from CSV output
-6. Compute summary metrics
-7. Write plots, CSV files, PDFs, and DOE tables
-
-The active standard-simulation build path compiles the shared Modelica model
-`BobLib.Standards.VehicleSim` into `_3_StandardSim/Build/VehicleSim/`, and the
-FourPost build compiles `BobLib.Standards.FourPostSim` into
-`_3_StandardSim/Build/FourPostSim/`.
-
-## Active Workflows
-
-Current public workflows:
-
-- `SteadyStateEval` - steady-state cornering characterization
-- `TransientEval` - steering transient / frequency-response characterization
-- `sim-doe` - OptSim DOE sweep and aggregation workflow
+- `_0_Utils/`: shared Python utilities, plotting/reporting helpers, and the
+  BobLib submodule.
+- `_1_VisualSim/`: experimental/offline visualization tooling; core model
+  visualization currently happens in OMEdit.
+- `_2_EnvelopeSim/`: GGV/YMD performance-envelope workflows.
+- `_3_StandardSim/`: standard vehicle studies: SteadyStateEval, TransientEval,
+  and FourPostEval.
+- `_4_OptSim/`: sensitivity and response-surface workflows.
+- `tests/`: release-polish and workflow regression checks.
+- `vehicle.yml`: active vehicle configuration copied into BobLib generation
+  inputs by the build targets.
 
 ## Quick Start
 
-From the repository root:
+Initialize the BobLib submodule:
 
 ```bash
 make init
-make setup
-make build-vehicle-sim
-make build-four-post-sim
-make steady-state-eval
-make transient-eval
-make sim-doe
 ```
 
-Helpful shell targets:
+Build the Docker development image:
 
 ```bash
-make shell-bobsim
-make shell-doe
+make docker-build
 ```
 
-Helpful cleanup targets:
+Show the available targets:
 
 ```bash
-make clean-doe
+make help
+```
+
+The Docker image is based on OpenModelica and installs the Python dependencies
+from `requirements.txt`.
+
+## Release Checks
+
+Run the local release gate:
+
+```bash
+make ci
+```
+
+This runs:
+
+- `make lint`
+- `make typecheck`
+- `make test`
+
+GitHub Actions runs the same make targets directly on the runner with the BobLib
+submodule checked out recursively.
+
+## Target Language
+
+BobSim's make targets use a small, intentional vocabulary:
+
+- `docker-*`: build or rebuild the development image.
+- `shell-*`: open an interactive shell in a workflow context.
+- `standard-*`: build and run standard vehicle evaluations.
+- `envelope-*`: generate performance-envelope outputs.
+- `opt-*`: run sensitivity and response-surface workflows.
+- `clean-*`: remove generated artifacts.
+
+## Standard Simulation Entrypoints
+
+Run the complete standard baseline:
+
+```bash
+make standard-eval-all
+```
+
+That target builds missing executables, then runs SteadyStateEval,
+TransientEval, and FourPostEval.
+
+For focused standard work, build and run individual studies:
+
+```bash
+make standard-build
+make standard-eval-steady-state
+make standard-eval-transient
+
+make standard-build-four-post
+make standard-eval-four-post
+```
+
+Build-only targets are also available:
+
+```bash
+make standard-build
+make standard-build-four-post
+```
+
+Reports and metric CSVs are written under `_3_StandardSim/results/`.
+
+## Cleanup
+
+Remove local Python/tool caches:
+
+```bash
 make clean
 ```
 
-## Standard Simulation
-
-The standard workflows live in `_3_StandardSim/` and use the shared Modelica
-runner plus report engine.
-
-Useful entry points:
-
-- `make build-vehicle-sim`
-- `make build-four-post-sim`
-- `_3_StandardSim/SteadyStateEval/steady_state_eval_config.yml`
-- `_3_StandardSim/TransientEval/transient_eval_config.yml`
-- `make steady-state-eval`
-- `make transient-eval`
-- `make four-post-eval`
-
-Outputs land in `_3_StandardSim/results/` as PDF reports and metrics CSVs.
-
-## DOE / OptSim
-
-OptSim is BobSim's DOE-style exploration pipeline for vehicle-architecture
-sweeps.
-
-What it does:
-
-- Selects a vehicle architecture from
-  `_4_OptSim/configs/vehicle_architecture.yaml`
-- Generates a private derived DOE config at `_4_OptSim/configs/_doe_config.yaml`
-- Samples the design space with Latin hypercube sampling
-- Writes one `variant.mo` per DOE point into `_4_OptSim/population/`
-- Compiles each variant with OpenModelica
-- Runs the SteadyStateEval report wrapper for each variant
-- Writes per-variant report artifacts
-- Aggregates the report metrics into `_4_OptSim/results/doe_results.csv`
-
-Main entry point:
+Use the more specific cleanup targets for generated simulation artifacts:
 
 ```bash
-make sim-doe
+make clean-standard
+make clean-envelope
+make clean-opt
 ```
-
-Useful configuration files:
-
-- `_4_OptSim/configs/vehicle_architecture.yaml`
-- `_4_OptSim/configs/compiler_config.yaml`
-- `_4_OptSim/configs/aggregator_config.yaml`
-- `_4_OptSim/configs/build_template.mos`
-
-`_4_OptSim/configs/_doe_config.yaml` is generated automatically from the
-architecture file and should not be edited by hand.
-
-Important unit convention:
-
-- `_4_OptSim` sweeps `staticAlpha` and `staticGamma` in degrees
-- the Modelica wheel physics consumes those values directly in the wheel
-  rotation setup
-
-Outputs land in:
-
-- `_4_OptSim/results/doe_results.csv`
-- `_4_OptSim/results/doe_results_viz.pdf`
-- `_4_OptSim/results/doe_response_surfaces.pdf`
-- `_4_OptSim/population/variant_XXXX/`
-
-## Outputs
-
-Common output locations:
-
-- `_3_StandardSim/results/` - standard-study PDFs and metrics CSVs
-- `_4_OptSim/population/` - generated DOE variants and per-variant artifacts
-- `_4_OptSim/results/` - DOE result tables and visualization PDFs
-
-## Documentation
-
-Long-form docs live in the separate BobDocs repository under `docs/`.
-Useful starting points include:
-
-- `../BobDocs/docs/index.md`
-- `../BobDocs/docs/bobsim/index.md`
-- `../BobDocs/docs/bobsim/doe.md`
-- `../BobDocs/docs/startup-guide/index.md`
-
-## Notes
-
-- `make sim-doe` runs the DOE pipeline inside the Docker `doe` service.
-- `make steady-state-eval`, `make transient-eval`, and `make four-post-eval`
-  run the standard workflows
-  directly from Python.
-- The repository intentionally keeps report generation, simulation execution,
-  and DOE post-processing separate so each layer can evolve independently.

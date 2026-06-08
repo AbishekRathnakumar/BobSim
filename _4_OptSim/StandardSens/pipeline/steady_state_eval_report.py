@@ -14,8 +14,9 @@ from typing import Any
 
 import yaml
 
-ROOT = Path(__file__).resolve().parent.parent
-BASE_CONFIG = ROOT.parent / "_3_StandardSim/SteadyStateEval/steady_state_eval_config.yml"
+STANDARD_DIR = Path(__file__).resolve().parents[1]
+REPO_ROOT = STANDARD_DIR.parent.parent
+BASE_CONFIG = REPO_ROOT / "_3_StandardSim/SteadyStateEval/steady_state_eval_config.yml"
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -62,7 +63,7 @@ def build_report_config(
     simulation["exec_name"] = exec_name
 
     # Leave execution settings exactly as defined in the standard-sim config.
-    # The OptSim layer will handle serial variant execution instead.
+    # That config controls whether velocity cases run serially or in parallel.
 
     # Keep the report output location anchored to the variant so the generated
     # PDF and metrics CSV live beside the DOE result artifacts.
@@ -104,7 +105,7 @@ def run_report(
 
     completed = subprocess.run(
         cmd,
-        cwd=str(ROOT.parent),
+        cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
         timeout=timeout,

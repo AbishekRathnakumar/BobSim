@@ -15,12 +15,14 @@ from typing import Any
 import yaml
 
 
-DOE_DIR = Path(__file__).resolve().parent.parent
-REPO_ROOT = DOE_DIR.parent
-CONFIG_DIR = DOE_DIR / "configs"
+STANDARD_DIR = Path(__file__).resolve().parents[1]
+OPTSIM_DIR = STANDARD_DIR.parent
+REPO_ROOT = OPTSIM_DIR.parent
+CONFIG_DIR = STANDARD_DIR / "configs"
 ARCHITECTURE_CONFIG = CONFIG_DIR / "vehicle_architecture.yaml"
 DOE_CONFIG = CONFIG_DIR / "_doe_config.yaml"
 COMPILER_CONFIG = CONFIG_DIR / "compiler_config.yaml"
+
 
 def load_yaml(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
@@ -94,33 +96,65 @@ def build_doe_config(
     for spec in raw_variables:
         if not isinstance(spec, dict):
             raise TypeError("Each sweep variable must be a mapping")
-        for field in ("path", "block", "param", "range"):
+        for field in ("path", "range"):
             if field not in spec:
                 raise KeyError(f"Missing sweep variable field {field!r}")
+        if "block" not in spec and "targets" not in spec:
+            raise KeyError("Sweep variable must define either 'block' or 'targets'")
 
-        variables.append(
-            {
-                "path": str(spec["path"]),
-                "block": str(spec["block"]),
-                "param": str(spec["param"]),
-                "range": list(spec["range"]),
-            }
-        )
+        variable: dict[str, Any] = {
+            "path": str(spec["path"]),
+            "range": list(spec["range"]),
+        }
+        if "values" in spec:
+            variable["values"] = list(spec["values"])
+        if "block" in spec:
+            variable["block"] = str(spec["block"])
+        if "param" in spec:
+            variable["param"] = str(spec["param"])
+        if "label" in spec:
+            variable["label"] = str(spec["label"])
+        if "baseline" in spec:
+            variable["baseline"] = float(spec["baseline"])
+        if "field_path" in spec:
+            variable["field_path"] = list(spec["field_path"])
+        if "index" in spec:
+            variable["index"] = list(spec["index"])
+        if "scale" in spec:
+            variable["scale"] = float(spec["scale"])
+        if "targets" in spec:
+            variable["targets"] = [
+                {
+                    key: list(value) if key in {"field_path", "index"} else value
+                    for key, value in target.items()
+                }
+                for target in spec["targets"]
+            ]
+        if "intervals" in spec:
+            variable["intervals"] = int(spec["intervals"])
+        variables.append(variable)
 
     if not variables:
         raise ValueError(
             f"No DOE sweep variables were enabled for architecture {vehicle_name!r}"
         )
 
+    sampling_cfg = architecture_cfg.get("sampling", {})
+    if sampling_cfg is None:
+        sampling_cfg = {}
+    if not isinstance(sampling_cfg, dict):
+        raise TypeError("architecture YAML sampling must be a mapping when provided")
+
     return {
         "architecture": {
-            "template": os.path.relpath(template_cfg_path, DOE_DIR),
+            "template": os.path.relpath(template_cfg_path, STANDARD_DIR),
             "vehicle": vehicle_name,
             "record": record_name,
-            "source": os.path.relpath(architecture_config_path, DOE_DIR),
+            "source": os.path.relpath(architecture_config_path, STANDARD_DIR),
         },
         "baseline_mo": os.path.relpath(record_path, DOE_CONFIG.parent),
         "variables": variables,
+        "sampling": sampling_cfg,
         "samples": int(architecture_cfg.get("samples", 3)),
         "seed": architecture_cfg.get("seed", 42),
     }

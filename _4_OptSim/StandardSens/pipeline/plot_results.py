@@ -6,7 +6,7 @@ Generates a compact PDF with:
 
 Usage:
     python plot_results.py
-    python plot_results.py --input results/doe_results.csv --output results/doe_results_viz.pdf
+    python plot_results.py --input _4_OptSim/results/standard_sensitivity_results.csv
 """
 
 from __future__ import annotations
@@ -26,29 +26,36 @@ import numpy as np
 import pandas as pd
 
 
-ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_INPUT = ROOT / "results/doe_results.csv"
-DEFAULT_OUTPUT = ROOT / "results/doe_results_viz.pdf"
+STANDARD_DIR = Path(__file__).resolve().parents[1]
+OPTSIM_DIR = STANDARD_DIR.parent
+OPTSIM_RESULTS_DIR = OPTSIM_DIR / "results"
+DEFAULT_INPUT = OPTSIM_RESULTS_DIR / "standard_sensitivity_results.csv"
+DEFAULT_OUTPUT = OPTSIM_RESULTS_DIR / "standard_sensitivity_overview.pdf"
 
 INPUT_COLS = [
-    "front.stabar.bar_rate",
-    "rear.stabar.bar_rate",
-    "front.wheel.static_alpha",
-    "rear.wheel.static_alpha",
-    "front.wheel.static_gamma",
-    "rear.wheel.static_gamma",
+    "front.stabar.rate_n_m_per_rad",
+    "rear.stabar.rate_n_m_per_rad",
+    "front.wheel.toe_deg",
+    "rear.wheel.toe_deg",
+    "front.wheel.camber_deg",
+    "rear.wheel.camber_deg",
+    "aero.load_scale",
 ]
 
 KEY_METRICS = [
+    "SteadyStateEval_limit_ay_mps2",
+    "SteadyStateEval_sideslip_gradient_deg_per_g",
+    "SteadyStateEval_limit_sideslip_gradient_deg_per_g",
     "SteadyStateEval_understeer_gradient_deg_per_g",
-    "SteadyStateEval_handwheel_understeer_gradient_deg_per_g",
+    "SteadyStateEval_limit_understeer_gradient_deg_per_g",
+    "SteadyStateEval_handwheel_angle_gradient_deg_per_g",
+    "SteadyStateEval_limit_handwheel_gradient_deg_per_g",
     "SteadyStateEval_roll_gradient_deg_per_g",
-    "SteadyStateEval_max_curvature_error_pct",
-    "SteadyStateEval_max_abs_ay_error_cmd",
-    "SteadyStateEval_handwheel_torque_max",
+    "SteadyStateEval_limit_roll_gradient_deg_per_g",
+    "SteadyStateEval_peak_handwheel_torque_Nm",
 ]
 
-FILTER_METRIC = "SteadyStateEval_max_abs_ay_error_cmd"
+FILTER_METRIC = None
 FILTER_LIMIT = 5.0
 
 
@@ -65,7 +72,7 @@ def _load_results(path: Path) -> pd.DataFrame:
 
 
 def _filter_results(df: pd.DataFrame) -> pd.DataFrame:
-    if FILTER_METRIC not in df.columns:
+    if FILTER_METRIC is None or FILTER_METRIC not in df.columns:
         return df
 
     kept = df[df[FILTER_METRIC] <= FILTER_LIMIT].copy()
@@ -91,11 +98,23 @@ def _normalize_columns(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
 
 
 def _plot_parallel_coordinates(ax: plt.Axes, df: pd.DataFrame) -> None:
-    norm = _normalize_columns(df, INPUT_COLS)
-    x = np.arange(len(INPUT_COLS))
+    input_cols = [col for col in INPUT_COLS if col in df.columns]
+    if not input_cols:
+        ax.axis("off")
+        ax.text(0.5, 0.5, "No configured sweep inputs found", ha="center", va="center")
+        return
+
+    norm = _normalize_columns(df, input_cols)
+    x = np.arange(len(input_cols))
     cmap = colormaps["viridis"]
 
     color_metric = "SteadyStateEval_understeer_gradient_deg_per_g"
+    if color_metric not in df.columns:
+        color_metric = next((metric for metric in KEY_METRICS if metric in df.columns), "")
+    if not color_metric:
+        colors = np.arange(len(df), dtype=float)
+    else:
+        colors = df[color_metric].to_numpy(dtype=float)
     colors = df[color_metric].to_numpy(dtype=float)
     cmin = float(np.min(colors))
     cmax = float(np.max(colors))
@@ -107,16 +126,7 @@ def _plot_parallel_coordinates(ax: plt.Axes, df: pd.DataFrame) -> None:
         ax.scatter(x, row.to_numpy(dtype=float), color=c, s=30, zorder=3)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(
-        [
-            "front\nstabar",
-            "rear\nstabar",
-            "front\nalpha",
-            "rear\nalpha",
-            "front\ngamma",
-            "rear\ngamma",
-        ]
-    )
+    ax.set_xticklabels([col.replace(".", "\n", 1) for col in input_cols])
     ax.set_yticks([0.0, 0.5, 1.0])
     ax.set_yticklabels(["low", "mid", "high"])
     ax.set_ylabel("Normalized sweep value")
@@ -125,14 +135,15 @@ def _plot_parallel_coordinates(ax: plt.Axes, df: pd.DataFrame) -> None:
 
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=cmin, vmax=cmax))
     cbar = plt.colorbar(sm, ax=ax, pad=0.02)
-    cbar.set_label("Understeer gradient (deg/g)")
+    cbar.set_label(color_metric.removeprefix("SteadyStateEval_") if color_metric else "variant")
 
 
 def _plot_metric_dashboard(axs: np.ndarray, df: pd.DataFrame) -> None:
     variants = df["variant"].tolist()
     x = np.arange(len(variants))
+    metrics = [metric for metric in KEY_METRICS if metric in df.columns]
 
-    for ax, metric in zip(axs.flat, KEY_METRICS, strict=False):
+    for ax, metric in zip(axs.flat, metrics, strict=False):
         values = df[metric].to_numpy(dtype=float)
         ax.bar(x, values, color="#2F6B9A")
         ax.set_title(metric.replace("SteadyStateEval_", ""), fontsize=10)
@@ -140,7 +151,7 @@ def _plot_metric_dashboard(axs: np.ndarray, df: pd.DataFrame) -> None:
         ax.set_xticklabels(variants, rotation=30, ha="right")
         ax.grid(True, axis="y", alpha=0.25)
 
-    for ax in axs.flat[len(KEY_METRICS):]:
+    for ax in axs.flat[len(metrics):]:
         ax.axis("off")
 
 

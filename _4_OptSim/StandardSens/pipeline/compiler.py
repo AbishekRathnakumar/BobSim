@@ -22,7 +22,7 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-from pipeline._pipeline_hash import (
+from StandardSens.pipeline._pipeline_hash import (
     check_pipeline_hash,
     write_pipeline_hash,
     write_variant_hash,
@@ -33,15 +33,21 @@ from pipeline._pipeline_hash import (
 # Paths
 # ---------------------------------------------------------------------------
 
-DOE_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_COMPILER_CONFIG = DOE_DIR / "configs/compiler_config.yaml"
-DEFAULT_MOS_TEMPLATE = DOE_DIR / "configs/build_template.mos"
-DEFAULT_DOE_CONFIG = DOE_DIR / "configs/_doe_config.yaml"
-DEFAULT_ARCHITECTURE_CONFIG = DOE_DIR / "configs/vehicle_architecture.yaml"
-DEFAULT_REPORT_WRAPPER = DOE_DIR / "pipeline/steady_state_eval_report.py"
-DEFAULT_STEADY_STATE_SIM = DOE_DIR.parent / "_3_StandardSim/SteadyStateEval/steady_state_eval_sim.py"
-DEFAULT_STEADY_STATE_CONFIG = DOE_DIR.parent / "_3_StandardSim/SteadyStateEval/steady_state_eval_config.yml"
-DEFAULT_MODELICA_RUNNER = DOE_DIR.parent / "_3_StandardSim/_modelica_runner.py"
+STANDARD_DIR = Path(__file__).resolve().parents[1]
+OPTSIM_DIR = STANDARD_DIR.parent
+REPO_ROOT = OPTSIM_DIR.parent
+DEFAULT_COMPILER_CONFIG = STANDARD_DIR / "configs/compiler_config.yaml"
+DEFAULT_MOS_TEMPLATE = STANDARD_DIR / "configs/build_template.mos"
+DEFAULT_DOE_CONFIG = STANDARD_DIR / "configs/_doe_config.yaml"
+DEFAULT_ARCHITECTURE_CONFIG = STANDARD_DIR / "configs/vehicle_architecture.yaml"
+DEFAULT_REPORT_WRAPPER = STANDARD_DIR / "pipeline/steady_state_eval_report.py"
+DEFAULT_STEADY_STATE_SIM = (
+    REPO_ROOT / "_3_StandardSim/SteadyStateEval/steady_state_eval_sim.py"
+)
+DEFAULT_STEADY_STATE_CONFIG = (
+    REPO_ROOT / "_3_StandardSim/SteadyStateEval/steady_state_eval_config.yml"
+)
+DEFAULT_MODELICA_RUNNER = REPO_ROOT / "_3_StandardSim/_modelica_runner.py"
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +60,50 @@ def load_compiler_config(config_path: Path = DEFAULT_COMPILER_CONFIG) -> dict:
         return yaml.safe_load(f)
 
 
+def _load_standard_simulation_config(standard: str) -> dict:
+    """Return simulation settings owned by the standard-specific config."""
+    config_paths = {
+        "SteadyStateEval": DEFAULT_STEADY_STATE_CONFIG,
+    }
+    config_path = config_paths.get(standard)
+    if config_path is None or not config_path.exists():
+        return {}
+
+    import yaml
+    with config_path.open("r", encoding="utf-8") as f:
+        config = yaml.safe_load(f) or {}
+
+    simulation = config.get("simulation", {})
+    if not isinstance(simulation, dict):
+        raise TypeError(f"{config_path} simulation block must be a mapping")
+    return simulation
+
+
+def _build_model_options(standard: str, standard_cfg: dict) -> dict:
+    """Resolve buildModel options, preferring the standard-specific config."""
+    simulation_cfg = _load_standard_simulation_config(standard)
+
+    def option(key: str, default: object | None = None) -> object:
+        if key in simulation_cfg:
+            return simulation_cfg[key]
+        if key in standard_cfg:
+            return standard_cfg[key]
+        if default is not None:
+            return default
+        raise KeyError(
+            f"Missing {key!r} for {standard}; define it in the standard config "
+            "or compiler_config.yaml"
+        )
+
+    return {
+        "start_time": option("start_time"),
+        "stop_time": option("stop_time"),
+        "intervals": option("intervals", 0),
+        "tolerance": option("tolerance"),
+        "solver": option("solver"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # build.mos generation
 # ---------------------------------------------------------------------------
@@ -63,20 +113,22 @@ def generate_mos(
         build_dir: Path,
         boblib_path: Path,
         standard_cfg: dict,
+        build_options: dict | None = None,
         template_path: Path = DEFAULT_MOS_TEMPLATE,
 ) -> str:
     """Fill in build_template.mos for one variant + standard."""
     template = template_path.read_text()
+    options = build_options or standard_cfg
     return template.format(
         boblib_path=boblib_path.resolve().as_posix(),
         variant_mo_path=variant_mo.resolve().as_posix(),
         build_dir=build_dir.resolve().as_posix(),
         model=standard_cfg["model"],
-        start_time=standard_cfg["start_time"],
-        stop_time=standard_cfg["stop_time"],
-        intervals=standard_cfg["intervals"],
-        tolerance=standard_cfg["tolerance"],
-        solver=standard_cfg["solver"],
+        start_time=options["start_time"],
+        stop_time=options["stop_time"],
+        intervals=options.get("intervals", 0),
+        tolerance=options["tolerance"],
+        solver=options["solver"],
     )
 
 
@@ -104,8 +156,14 @@ def compile_variant(
     build_dir = variant_dir / "build" / standard
     build_dir.mkdir(parents=True, exist_ok=True)
 
+    build_options = _build_model_options(standard, standard_cfg)
     mos_content = generate_mos(
-        variant_mo, build_dir, boblib_path, standard_cfg, template_path
+        variant_mo,
+        build_dir,
+        boblib_path,
+        standard_cfg,
+        build_options=build_options,
+        template_path=template_path,
     )
     mos_path = variant_dir / f"build_{standard}.mos"
     mos_path.write_text(mos_content)
@@ -306,7 +364,7 @@ def compile_all(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    population = DOE_DIR / "population"
+    population = OPTSIM_DIR / "Build/StandardSens/population"
     config = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_COMPILER_CONFIG
 
     print(f"Compiler config:  {config}")

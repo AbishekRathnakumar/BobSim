@@ -6,18 +6,14 @@ metric columns, and returns the nearest variant's suspension parameters.
 Usage:
     python search.py --metrics \\
         SteadyStateEval_understeer_gradient_deg_per_g=0.05 \\
-        SteadyStateEval_handwheel_torque_max=12
+        SteadyStateEval_peak_handwheel_torque_Nm=12
 
     python search.py \\
         --metrics SteadyStateEval_understeer_gradient_deg_per_g=0.05 \\
-        SteadyStateEval_handwheel_torque_max=12 \\
-        --parquet results/doe_results.parquet \\
+        SteadyStateEval_peak_handwheel_torque_Nm=12 \\
+        --parquet _4_OptSim/Build/StandardSens/standard_sensitivity_results.parquet \\
         --top 3
  
-Options:
-    --metrics   One or more metric=value pairs to search on (required)
-    --parquet   Path to parquet file (default: results/doe_results.parquet)
-    --top       Number of nearest variants to return (default: 1)
 """
 
 from __future__ import annotations
@@ -28,16 +24,19 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import KDTree
 
-DEFAULT_PARQUET = Path(__file__).resolve().parent.parent / "results/doe_results.parquet"
+STANDARD_DIR = Path(__file__).resolve().parents[1]
+OPTSIM_DIR = STANDARD_DIR.parent
+DEFAULT_PARQUET = OPTSIM_DIR / "Build/StandardSens/standard_sensitivity_results.parquet"
 
 # these are params that we sweep
 INPUT_PARAMS = [
-    "front.stabar.bar_rate",
-    "rear.stabar.bar_rate",
-    "front.wheel.static_alpha",
-    "rear.wheel.static_alpha",
-    "front.wheel.static_gamma",
-    "rear.wheel.static_gamma",
+    "front.stabar.rate_n_m_per_rad",
+    "rear.stabar.rate_n_m_per_rad",
+    "front.wheel.toe_deg",
+    "rear.wheel.toe_deg",
+    "front.wheel.camber_deg",
+    "rear.wheel.camber_deg",
+    "aero.load_scale",
 ]
 
 
@@ -51,7 +50,7 @@ def search(targets: dict[str, float], parquet_path: Path = DEFAULT_PARQUET,
 
     Args:
         targets:      dict of metric_name -> target_value
-        parquet_path: path to doe_results.parquet
+        parquet_path: path to the aggregated StandardSens parquet
         top:          number of nearest variants to return
 
     Returns:
@@ -94,7 +93,8 @@ def search(targets: dict[str, float], parquet_path: Path = DEFAULT_PARQUET,
     distances_arr = np.atleast_1d(distances)
     indices_arr = np.atleast_1d(indices).astype(int)
 
-    results = df.iloc[indices_arr][["variant"] + INPUT_PARAMS + metric_cols].copy()
+    input_cols = [col for col in INPUT_PARAMS if col in df.columns]
+    results = df.iloc[indices_arr][["variant"] + input_cols + metric_cols].copy()
     results.insert(1, "distance", [round(float(d), 6) for d in distances_arr])
 
     return results.reset_index(drop=True)
@@ -156,9 +156,10 @@ def _print_results(results: pd.DataFrame, targets: dict[str, float]) -> None:
     print()
     for _, row in results.iterrows():
         print(f"Variant:  {row['variant']}  (distance: {row['distance']})")
-        print("  Suspension params:")
+        print("  Swept inputs:")
         for param in INPUT_PARAMS:
-            print(f"    {param:<35} {row[param]:.4f}")
+            if param in row:
+                print(f"    {param:<35} {row[param]:.4f}")
         print("  Metrics:")
         for metric in metric_cols:
             print(f"    {metric:<35} {row[metric]:.6f}  (target: {targets[metric]})")

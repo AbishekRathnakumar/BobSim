@@ -12,7 +12,7 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-from pipeline.compiler import (
+from StandardSens.pipeline.compiler import (
     compile_variant,
     _should_compile,
     load_compiler_config,
@@ -24,13 +24,14 @@ from pipeline.compiler import (
     DEFAULT_STEADY_STATE_CONFIG,
     DEFAULT_MODELICA_RUNNER,
 )
-from pipeline.batch import run_variant, _csv_is_valid
-from pipeline._pipeline_hash import (
+from StandardSens.pipeline.batch import run_variant, _csv_is_valid
+from StandardSens.pipeline._pipeline_hash import (
     check_pipeline_hash,
     write_pipeline_hash,
 )
 
-DOE_DIR = Path(__file__).resolve().parent.parent
+STANDARD_DIR = Path(__file__).resolve().parents[1]
+OPTSIM_DIR = STANDARD_DIR.parent
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +91,7 @@ def _build_and_run_worker(args: tuple) -> tuple[str, bool, str]:
 
 def build_all(
     population_dir: Path,
-    compiler_config_path: Path = DOE_DIR / "configs/compiler_config.yaml",
+    compiler_config_path: Path = STANDARD_DIR / "configs/compiler_config.yaml",
     template_path: Path = DEFAULT_MOS_TEMPLATE,
     doe_config_path: Path = DEFAULT_DOE_CONFIG,
     architecture_config_path: Path = DEFAULT_ARCHITECTURE_CONFIG,
@@ -207,6 +208,10 @@ def build_all(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    population = DOE_DIR / "population"
-    config = Path(sys.argv[1]) if len(sys.argv) > 1 else DOE_DIR / "configs/compiler_config.yaml"
+    population = OPTSIM_DIR / "Build/StandardSens/population"
+    config = (
+        Path(sys.argv[1])
+        if len(sys.argv) > 1
+        else STANDARD_DIR / "configs/compiler_config.yaml"
+    )
     build_all(population, compiler_config_path=config)

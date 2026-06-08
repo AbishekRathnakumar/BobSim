@@ -20,14 +20,15 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from pipeline.steady_state_eval_report import run_report
+from StandardSens.pipeline.steady_state_eval_report import run_report
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
-ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG = ROOT / "configs/compiler_config.yaml"
+STANDARD_DIR = Path(__file__).resolve().parents[1]
+OPTSIM_DIR = STANDARD_DIR.parent
+DEFAULT_CONFIG = STANDARD_DIR / "configs/compiler_config.yaml"
 
 # Minimum rows expected in a valid metrics CSV (header + at least 1 metric row)
 MIN_RESULT_ROWS = 2
@@ -209,7 +210,7 @@ def run_all(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    population = ROOT / "population"
+    population = OPTSIM_DIR / "Build/StandardSens/population"
     config = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_CONFIG
 
     print(f"Config:         {config}")
