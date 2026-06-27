@@ -1,9 +1,11 @@
 # BobSim
 
 BobSim is the BobDyn high-fidelity vehicle analysis workspace. It wraps the
-BobLib Modelica vehicle models with repeatable Python workflows for standard
-vehicle dynamics studies, envelope calculations, sensitivity workflows,
-post-processing, and report generation.
+BobLib Modelica vehicle models in a local browser app for configuring vehicles,
+writing BobLib-backed Modelica definitions, running standard studies, exploring
+results, and keeping generated artifacts organized. The underlying Python and
+Modelica workflows are still available as Make targets for automation and
+focused development work.
 
 The full documentation lives at:
 
@@ -30,7 +32,7 @@ is healthy.
   sensitivity workflows. The Modelica standard entry points now use checked-in
   `BobLib` records.
 
-## Quick Start
+## App Quick Start
 
 Initialize the BobLib submodule:
 
@@ -53,13 +55,22 @@ make help
 The Docker image is based on OpenModelica and installs the Python dependencies
 from `requirements.txt`.
 
-Start the local browser app:
+Start the BobSim app:
 
 ```bash
 make app
 ```
 
 Then open `http://127.0.0.1:8765`.
+
+The app is the primary entry point for normal vehicle-development work. Use it
+to select or edit a vehicle configuration, save the setup, write the generated
+Modelica records into BobLib, configure simulation runs, review logs, and browse
+saved results. Generated builds, workspaces, and result archives are local
+runtime content and are intentionally ignored by git.
+
+The command-line targets below mirror the same workflow pieces for CI,
+automation, and focused debugging.
 
 ## Release Checks
 
@@ -100,6 +111,11 @@ BobSim's make targets use a small, intentional vocabulary:
 
 ## Standard Simulation Entrypoints
 
+Most standard simulation work should be launched from the app so the vehicle
+configuration, generated Modelica, run logs, and saved results stay keyed
+together. The Make targets remain useful for direct smoke tests and batch
+development.
+
 Run the complete standard baseline:
 
 ```bash
@@ -132,16 +148,20 @@ Reports and metric CSVs are written under `_3_StandardSim/results/`.
 
 ## Cleanup
 
-Remove local Python/tool caches:
+Remove local caches and user-generated content such as simulation results, app
+workspaces, saved app results, and cached Modelica builds:
 
 ```bash
 make clean
 ```
 
-Use the more specific cleanup targets for generated simulation artifacts:
+Use more specific cleanup targets when you only want to clear part of the
+workspace:
 
 ```bash
+make clean-caches
 make clean-standard
 make clean-envelope
 make clean-opt
+make clean-app
 ```
