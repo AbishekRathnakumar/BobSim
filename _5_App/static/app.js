@@ -138,6 +138,7 @@ const state = {
   geometrySelectedPointId: null,
   geometryDrag: null,
   geometryAxis: "x",
+  geometryShiftActive: false,
   geometryShowFront: savedGeometryShowFront === null ? true : savedGeometryShowFront === "true",
   geometryShowRear: savedGeometryShowRear === null ? true : savedGeometryShowRear === "true",
   geometryPlotSelections: savedGeometryPlotSelections,
@@ -895,6 +896,26 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function finiteRange(values, { positive = false } = {}) {
+  let min = Infinity;
+  let max = -Infinity;
+  let count = 0;
+  (values || []).forEach((value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return;
+    if (positive && numeric <= 0) return;
+    min = Math.min(min, numeric);
+    max = Math.max(max, numeric);
+    count += 1;
+  });
+  return count ? { min, max, count } : null;
+}
+
+function finiteMax(values, fallback = 0) {
+  const range = finiteRange(values);
+  return range ? range.max : fallback;
+}
+
 function setupPaneBounds() {
   const workspace = document.querySelector(".setup-workspace");
   const width = workspace?.getBoundingClientRect().width || 0;
@@ -1389,7 +1410,10 @@ function isTireAlignmentFieldTarget(target) {
 
 function isTirePayloadRefreshTarget(target) {
   const path = configPathFromTarget(target);
-  return Boolean(path && ["front", "rear"].includes(path[0]) && path[1] === "tire");
+  return Boolean(path && ["front", "rear"].includes(path[0]) && (
+    path[1] === "tire"
+    || isTireAlignmentFieldTarget(target)
+  ));
 }
 
 function buildParameterAreas(fields) {
@@ -1656,15 +1680,19 @@ function tireCombinedFzRange() {
       ...(combined.fx_surfaces_by_fz || []).map((surface) => surface.fz_n),
       ...(combined.fy_surfaces_by_fz || []).map((surface) => surface.fz_n),
     ].map(Number).filter((value) => Number.isFinite(value) && value > 0);
-    return samples.length ? { min: Math.min(...samples), max: Math.max(...samples), samples } : null;
+    const range = finiteRange(samples);
+    return range ? { min: range.min, max: range.max, samples } : null;
   }).filter(Boolean);
   const samples = sideRanges.flatMap((range) => range.samples);
   if (!samples.length) return { min: 1, max: 1 };
-  let min = sideRanges.length ? Math.max(...sideRanges.map((range) => range.min)) : Math.min(...samples);
-  let max = sideRanges.length ? Math.min(...sideRanges.map((range) => range.max)) : Math.max(...samples);
+  const sampleRange = finiteRange(samples, { positive: true });
+  let min = sideRanges.length ? finiteMax(sideRanges.map((range) => range.min), sampleRange?.min || 1) : sampleRange.min;
+  let max = sideRanges.length
+    ? (finiteRange(sideRanges.map((range) => range.max))?.min ?? sampleRange.max)
+    : sampleRange.max;
   if (max <= min) {
-    min = Math.min(...samples);
-    max = Math.max(...samples);
+    min = sampleRange.min;
+    max = sampleRange.max;
   }
   if (max <= min) {
     min = Math.max(1, min * 0.5);
@@ -1714,7 +1742,8 @@ function tireLoadCamberRange() {
     ];
   }).map(Number).filter(Number.isFinite);
   if (!samples.length) return { min: 0, max: 0 };
-  return { min: Math.min(...samples), max: Math.max(...samples) };
+  const range = finiteRange(samples);
+  return { min: range.min, max: range.max };
 }
 
 function defaultTireLoadCamberDeg() {
@@ -3675,7 +3704,8 @@ function arrayRangeLabel(values, unit = "") {
   if (!numbers.length) return `${values.length} items`;
   const suffix = unit ? ` ${unit}` : "";
   if (numbers.length === 1) return `${formatNumber(numbers[0])}${suffix}`;
-  return `${formatNumber(Math.min(...numbers))} to ${formatNumber(Math.max(...numbers))}${suffix}`;
+  const range = finiteRange(numbers);
+  return `${formatNumber(range.min)} to ${formatNumber(range.max)}${suffix}`;
 }
 
 function scalarLabel(value, unit = "") {
@@ -5010,7 +5040,7 @@ function drawVehiclePreview(data) {
     try {
       drawTirePreview(ctx, width, height, data);
     } catch (error) {
-      console.error("Tire preview draw failed", error);
+      console.error("Tire preview draw failed", error?.stack || error);
       drawTirePreviewError(ctx, width, height, error, data);
     }
     return;
@@ -5848,6 +5878,19 @@ function cycleGeometryAxis() {
   setGeometryAxis(axes[(axes.indexOf(state.geometryAxis) + 1) % axes.length]);
 }
 
+function canUseGeometryAxisShortcut(target = document.activeElement) {
+  if (!isSpatialPreviewArea()) return false;
+  if (!isTextEntryTarget(target)) return true;
+  return Boolean(target?.closest?.("#geometry-point-editor"));
+}
+
+function handleGeometryAxisShortcut(event = null) {
+  if (!canUseGeometryAxisShortcut(event?.target)) return false;
+  event?.preventDefault?.();
+  cycleGeometryAxis();
+  return true;
+}
+
 function axisIndex(axis) {
   return { x: 0, y: 1, z: 2 }[axis] ?? -1;
 }
@@ -6084,6 +6127,12 @@ function startGeometryDrag(event, point) {
 function updateGeometryDrag(event) {
   const drag = state.geometryDrag;
   if (!drag || drag.pointerId !== event.pointerId) return;
+  if (event.shiftKey && !state.geometryShiftActive) {
+    state.geometryShiftActive = true;
+    cycleGeometryAxis();
+  } else if (!event.shiftKey) {
+    state.geometryShiftActive = false;
+  }
   const point = geometryPointById(drag.pointId);
   if (!point) return;
   drag.lastX = event.clientX;
@@ -6118,6 +6167,7 @@ function finishGeometryDrag(pointerId) {
   const drag = state.geometryDrag;
   if (!drag || drag.pointerId !== pointerId) return false;
   state.geometryDrag = null;
+  state.geometryShiftActive = false;
   document.getElementById("vehicle-canvas")?.classList.remove("geometry-dragging");
   renderParameterTabCanvases();
   return true;
@@ -7939,9 +7989,9 @@ function drawHeatmapPanel(ctx, x, y, width, height, title, table, xGrid, yGrid, 
     drawCanvasText(ctx, "No map", x + width / 2, y + height / 2, { align: "center", color: palette.muted });
     return;
   }
-  const values = table.flat().map(Number).filter(Number.isFinite);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  const range = finiteRange(table.flat());
+  const min = range?.min ?? 0;
+  const max = range?.max ?? 0;
   drawCanvasText(ctx, `${formatNumber(min)} to ${formatNumber(max)} ${unit}`, x + width - 12, y + 17, {
     size: 11,
     weight: 650,
@@ -7949,7 +7999,7 @@ function drawHeatmapPanel(ctx, x, y, width, height, title, table, xGrid, yGrid, 
     color: palette.muted,
   });
   const rows = table.length;
-  const cols = Math.max(...table.map((row) => Array.isArray(row) ? row.length : 0));
+  const cols = finiteMax(table.map((row) => Array.isArray(row) ? row.length : 0), 0);
   const chartX = x + 34;
   const chartY = y + 42;
   const chartW = width - 52;
@@ -8772,7 +8822,7 @@ function fxSurfaceRowsFromForceMapRows(rows) {
 }
 
 function fySurfaceRowsFromForceMapRows(rows) {
-  const columnCount = Math.max(0, ...rows.map((row) => row.points?.length || 0));
+  const columnCount = finiteMax(rows.map((row) => row.points?.length || 0), 0);
   return Array.from({ length: columnCount }, (_item, columnIndex) => {
     const points = rows
       .map((row) => row.points?.[columnIndex])
@@ -8935,13 +8985,23 @@ function drawTireSurfacePanel(ctx, x, y, width, height, title, surfaces, xLabel,
   }
   drawTireSurfaceLegend(ctx, usableSurfaces, x + 12, y + 36, Math.max(80, width - 64));
 
-  const allPoints = usableSurfaces.flatMap((surface) => surface.rows.flatMap((row) => row.points));
-  const xDomain = plotDomain(allPoints.map((point) => point.x), { padFraction: 0.02 });
-  const yDomain = plotDomain(allPoints.map((point) => point.y), { padFraction: 0.02 });
-  const zValues = allPoints.map((point) => point.z);
+  const xValues = [];
+  const yValues = [];
+  const zValues = [];
   usableSurfaces.forEach((surface) => {
-    if (Array.isArray(surface.zDomainValues)) zValues.push(...surface.zDomainValues);
+    surface.rows.forEach((row) => {
+      row.points.forEach((point) => {
+        xValues.push(point.x);
+        yValues.push(point.y);
+        zValues.push(point.z);
+      });
+    });
+    if (Array.isArray(surface.zDomainValues)) {
+      surface.zDomainValues.forEach((value) => zValues.push(value));
+    }
   });
+  const xDomain = plotDomain(xValues, { padFraction: 0.02 });
+  const yDomain = plotDomain(yValues, { padFraction: 0.02 });
   const zDomain = plotDomain(zValues, { includeZero: true, padFraction: 0.08 });
   const plot = {
     x: x + 42,
@@ -9212,9 +9272,11 @@ function projectArrowHead(x, y, angle) {
 
 function drawTireSurfaceWireframe(ctx, surface, project, surfaceIndex) {
   const color = surface.color || canvasPalette().blue;
-  const rows = surface.rows;
+  const rows = (surface.rows || []).filter((row) => Array.isArray(row.points) && row.points.length);
+  if (!rows.length) return;
   const rowStep = Math.max(1, Math.floor(rows.length / 9));
-  const columnCount = Math.max(...rows.map((row) => row.points.length));
+  const columnCount = finiteMax(rows.map((row) => row.points.length), 0);
+  if (!Number.isFinite(columnCount) || columnCount <= 0) return;
   const columnStep = Math.max(1, Math.floor(columnCount / 9));
   ctx.save();
   ctx.lineJoin = "round";
@@ -9564,9 +9626,16 @@ function forceMapRowsFromPureCurves(evalSide, fzN) {
 }
 
 function summarizeTireForceMap(rows, fzN) {
-  const points = rows.flatMap((row) => row.points || []);
-  const fxPeakN = Math.max(0, ...points.map((point) => Math.abs(point.fxN)).filter(Number.isFinite));
-  const fyPeakN = Math.max(0, ...points.map((point) => Math.abs(point.fyN)).filter(Number.isFinite));
+  let fxPeakN = 0;
+  let fyPeakN = 0;
+  (rows || []).forEach((row) => {
+    (row.points || []).forEach((point) => {
+      const fx = Math.abs(Number(point.fxN));
+      const fy = Math.abs(Number(point.fyN));
+      if (Number.isFinite(fx)) fxPeakN = Math.max(fxPeakN, fx);
+      if (Number.isFinite(fy)) fyPeakN = Math.max(fyPeakN, fy);
+    });
+  });
   const load = positiveFiniteOr(fzN, 1);
   const zeroPoint = tireForceMapPointAt(rows, 0, 0) || { alphaDeg: 0, kappa: 0, fxN: 0, fyN: 0 };
   return {
@@ -9760,27 +9829,29 @@ function drawTireFrictionEllipse(ctx, corner, cx, cy, maxRadius, maxForce) {
 }
 
 function drawTireForceMapIsolines(ctx, rows, project, color) {
-  if (!rows.length) return;
+  const usableRows = (rows || []).filter((row) => Array.isArray(row.points) && row.points.length);
+  if (!usableRows.length) return;
   const palette = canvasPalette();
-  const rowIndexes = tireForceMapIsolineIndexes(rows.length, rows.length);
-  const columnCount = Math.max(...rows.map((row) => row.points.length));
-  const columnIndexes = tireForceMapIsolineIndexes(columnCount, columnCount);
-  const majorRowStep = Math.max(1, Math.floor(rows.length / 6));
+  const rowIndexes = tireForceMapIsolineIndexes(usableRows.length, 13);
+  const columnCount = finiteMax(usableRows.map((row) => row.points.length), 0);
+  if (!Number.isFinite(columnCount) || columnCount <= 0) return;
+  const columnIndexes = tireForceMapIsolineIndexes(columnCount, 13);
+  const majorRowStep = Math.max(1, Math.floor(usableRows.length / 6));
   const majorColumnStep = Math.max(1, Math.floor(columnCount / 6));
   ctx.save();
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
   rowIndexes.forEach((rowIndex) => {
-    const row = rows[rowIndex];
+    const row = usableRows[rowIndex];
     const isZeroAlpha = Math.abs(Number(row.alphaDeg)) < 1e-6;
-    const isMajor = rowIndex % majorRowStep === 0 || rowIndex === rows.length - 1;
+    const isMajor = rowIndex % majorRowStep === 0 || rowIndex === usableRows.length - 1;
     ctx.strokeStyle = colorWithAlpha(color, isZeroAlpha ? 0.95 : isMajor ? 0.38 : 0.18);
     ctx.lineWidth = isZeroAlpha ? 2.1 : isMajor ? 1.15 : 0.7;
     ctx.setLineDash([]);
     drawProjectedPolyline(ctx, row.points.map(project));
   });
   columnIndexes.forEach((columnIndex) => {
-    const points = rows.map((row) => row.points[columnIndex]).filter(Boolean);
+    const points = usableRows.map((row) => row.points[columnIndex]).filter(Boolean);
     const kappa = Number(points[0]?.kappa);
     const isZeroKappa = Math.abs(kappa) < 1e-6;
     const isMajor = columnIndex % majorColumnStep === 0 || columnIndex === columnCount - 1;
@@ -9795,11 +9866,12 @@ function drawTireForceMapIsolines(ctx, rows, project, color) {
 }
 
 function tireForceMapIsolineIndexes(count, targetCount) {
-  if (count <= 0) return [];
-  if (count <= targetCount) return Array.from({ length: count }, (_item, index) => index);
+  if (!Number.isFinite(count) || count <= 0) return [];
+  const target = Math.max(1, Math.min(Math.floor(targetCount) || 1, count));
+  if (count <= target) return Array.from({ length: count }, (_item, index) => index);
   const indexes = new Set([0, Math.floor((count - 1) / 2), count - 1]);
-  const step = (count - 1) / Math.max(1, targetCount - 1);
-  for (let index = 1; index < targetCount - 1; index += 1) {
+  const step = (count - 1) / Math.max(1, target - 1);
+  for (let index = 1; index < target - 1; index += 1) {
     indexes.add(Math.round(index * step));
   }
   return [...indexes].sort((left, right) => left - right);
@@ -10014,10 +10086,13 @@ function drawSeriesPanel(ctx, x, y, width, height, title, series, xLabel, yLabel
     y: Number(point[item.yKey]),
   }))).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
   if (!allPoints.length) return;
-  const minX = Math.min(...allPoints.map((point) => point.x));
-  const maxX = Math.max(...allPoints.map((point) => point.x));
-  const minY = Math.min(...allPoints.map((point) => point.y));
-  const maxY = Math.max(...allPoints.map((point) => point.y));
+  const xRange = finiteRange(allPoints.map((point) => point.x));
+  const yRange = finiteRange(allPoints.map((point) => point.y));
+  if (!xRange || !yRange) return;
+  const minX = xRange.min;
+  const maxX = xRange.max;
+  const minY = yRange.min;
+  const maxY = yRange.max;
   const chartX = x + 44;
   const chartY = y + 38;
   const chartW = width - 62;
@@ -10391,10 +10466,10 @@ function createPlotChart({
 }
 
 function plotDomain(values, { includeZero = false, padFraction = 0.08 } = {}) {
-  const finite = values.map(Number).filter(Number.isFinite);
-  if (!finite.length) return [-1, 1];
-  let min = Math.min(...finite);
-  let max = Math.max(...finite);
+  const range = finiteRange(values);
+  if (!range) return [-1, 1];
+  let min = range.min;
+  let max = range.max;
   if (includeZero) {
     min = Math.min(min, 0);
     max = Math.max(max, 0);
@@ -11312,9 +11387,9 @@ function drawMiniVehiclePreview(canvas, data, group) {
 
 function drawMiniHeatmap(ctx, width, height, table) {
   const rows = Array.isArray(table) && table.length ? table : [[0, 1], [1, 0]];
-  const flat = rows.flat().map(Number).filter(Number.isFinite);
-  const min = Math.min(...flat);
-  const max = Math.max(...flat);
+  const range = finiteRange(rows.flat());
+  const min = range?.min ?? 0;
+  const max = range?.max ?? 0;
   const cellW = width / Math.max(1, rows[0].length);
   const cellH = height / Math.max(1, rows.length);
   rows.forEach((row, rowIndex) => {
@@ -11923,10 +11998,12 @@ function wireGeometryEditor() {
       event.preventDefault();
       return;
     }
-    if (event.key === "Shift" && !event.repeat && isSpatialPreviewArea() && !isTextEntryTarget(event.target)) {
-      event.preventDefault();
-      cycleGeometryAxis();
+    if (event.key === "Shift" && !event.repeat && handleGeometryAxisShortcut(event)) {
+      state.geometryShiftActive = true;
     }
+  });
+  window.addEventListener("keyup", (event) => {
+    if (event.key === "Shift") state.geometryShiftActive = false;
   });
 }
 

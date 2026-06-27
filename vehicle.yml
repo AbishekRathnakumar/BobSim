@@ -110,7 +110,7 @@ front:
           - 0
         - - 1
           - 26269.02525
-      free_length_m: 0.2
+      free_length_m: 0.199700878416
       damper_table:
         table:
         - - -1
@@ -288,7 +288,7 @@ rear:
           - 0
         - - 1
           - 43781.70875
-      free_length_m: 0.265
+      free_length_m: 0.263423049137
       damper_table:
         table:
         - - -1

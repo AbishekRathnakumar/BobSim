@@ -13,6 +13,7 @@ import mimetypes
 import os
 import platform
 from pathlib import Path
+import runpy
 import shutil
 import subprocess
 import sys
@@ -34,8 +35,111 @@ from _5_App.modelica_generator import (
 )
 
 
-ROOT = Path(__file__).resolve().parents[1]
-STATIC_ROOT = Path(__file__).resolve().parent / "static"
+APP_NAME = "BobDyn"
+PACKAGE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])).resolve()
+
+
+def _default_runtime_root() -> Path:
+    override = os.environ.get("BOBDYN_HOME")
+    if override:
+        return Path(override).expanduser().resolve()
+
+    system = platform.system()
+    if system == "Windows":
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    elif system == "Darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return (base / APP_NAME / "BobSim").resolve()
+
+
+def _runtime_copy_ignore(_: str, names: list[str]) -> set[str]:
+    ignored = {
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".coverage",
+        "htmlcov",
+    }
+    return {name for name in names if name in ignored or name.endswith((".pyc", ".pyo"))}
+
+
+def _seed_runtime_root(runtime_root: Path) -> None:
+    seed_paths = (
+        "vehicle.yml",
+        "_0_Utils/external/BobLib/BobLib",
+        "_0_Utils/plotting",
+        "_0_Utils/reporting",
+        "_0_Utils/tire_templates",
+        "_0_Utils/vehicle_templates",
+        "_1_VisualSim/visual_templates",
+        "_2_EnvelopeSim/GGV/ggv_config.yml",
+        "_2_EnvelopeSim/YMD/ymd_config.yml",
+        "_2_EnvelopeSim/VehicleReview/vehicle_review_config.yml",
+        "_3_StandardSim/build_vehicle_sim.mos",
+        "_3_StandardSim/build_four_post_sim.mos",
+        "_3_StandardSim/FourPostEval/four_post_eval_config.yml",
+        "_3_StandardSim/RampSteerEval/ramp_steer_eval_config.yml",
+        "_3_StandardSim/SteadyStateEval/steady_state_eval_config.yml",
+        "_3_StandardSim/TransientEval/transient_eval_config.yml",
+        "_4_OptSim/EnvelopeSens/config.yml",
+        "_4_OptSim/StandardSens/configs",
+        "_5_App/sim_configs/_defaults",
+    )
+    runtime_output_dirs = (
+        "_2_EnvelopeSim/Build",
+        "_2_EnvelopeSim/results",
+        "_3_StandardSim/Build",
+        "_3_StandardSim/BuildBobLib",
+        "_3_StandardSim/generated_results",
+        "_3_StandardSim/results",
+        "_4_OptSim/Build",
+        "_4_OptSim/results",
+        "_4_OptSim/EnvelopeSens/results",
+        "_4_OptSim/StandardSens/results",
+        "_4_OptSim/population",
+        "_4_OptSim/population_refined",
+        "_5_App/build_archive",
+        "_5_App/saved_results",
+        "_5_App/sim_configs",
+        "_5_App/vehicle_configs",
+        "_5_App/vehicle_workspaces",
+    )
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    for rel_path in seed_paths:
+        source = PACKAGE_ROOT / rel_path
+        target = runtime_root / rel_path
+        if not source.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            if target.exists():
+                continue
+            shutil.copytree(source, target, symlinks=True, ignore=_runtime_copy_ignore)
+        else:
+            if target.is_dir():
+                shutil.rmtree(target)
+            if target.exists():
+                continue
+            shutil.copy2(source, target)
+    for rel_path in runtime_output_dirs:
+        (runtime_root / rel_path).mkdir(parents=True, exist_ok=True)
+
+
+def _prepare_runtime_root() -> Path:
+    if not getattr(sys, "frozen", False):
+        return PACKAGE_ROOT
+
+    runtime_root = _default_runtime_root()
+    _seed_runtime_root(runtime_root)
+    os.chdir(runtime_root)
+    return runtime_root
+
+
+ROOT = _prepare_runtime_root()
+STATIC_ROOT = PACKAGE_ROOT / "_5_App/static"
 SAVED_VEHICLE_ROOT = Path("_5_App/vehicle_configs")
 SAVED_SIM_CONFIG_ROOT = Path("_5_App/sim_configs")
 SAVED_RESULTS_ROOT = Path("_5_App/saved_results")
@@ -118,6 +222,11 @@ class ConfigSpec:
 
 
 PYTHON = sys.executable
+PYTHON_MODULE_ARG = "--run-module" if getattr(sys, "frozen", False) else "-m"
+
+
+def _python_module_argv(module: str) -> tuple[str, ...]:
+    return (PYTHON, PYTHON_MODULE_ARG, module)
 
 ACTION_SPECS: dict[str, ActionSpec] = {
     "build-vehicle": ActionSpec(
@@ -133,48 +242,48 @@ ACTION_SPECS: dict[str, ActionSpec] = {
     "run-ramp-steer": ActionSpec(
         id="run-ramp-steer",
         label="Run RampSteerEval",
-        argv=(PYTHON, "-m", "_3_StandardSim.RampSteerEval.ramp_steer_eval_sim"),
+        argv=_python_module_argv("_3_StandardSim.RampSteerEval.ramp_steer_eval_sim"),
     ),
     "run-steady-state": ActionSpec(
         id="run-steady-state",
         label="Run SteadyStateEval",
-        argv=(PYTHON, "-m", "_3_StandardSim.SteadyStateEval.steady_state_eval_sim"),
+        argv=_python_module_argv("_3_StandardSim.SteadyStateEval.steady_state_eval_sim"),
     ),
     "run-transient": ActionSpec(
         id="run-transient",
         label="Run TransientEval",
-        argv=(PYTHON, "-m", "_3_StandardSim.TransientEval.transient_eval_sim"),
+        argv=_python_module_argv("_3_StandardSim.TransientEval.transient_eval_sim"),
     ),
     "run-four-post": ActionSpec(
         id="run-four-post",
         label="Run FourPostEval",
-        argv=(PYTHON, "-m", "_3_StandardSim.FourPostEval.four_post_eval_sim"),
+        argv=_python_module_argv("_3_StandardSim.FourPostEval.four_post_eval_sim"),
     ),
     "run-ggv": ActionSpec(
         id="run-ggv",
         label="Run GGV",
-        argv=(PYTHON, "-m", "_2_EnvelopeSim.GGV.ggv_generation"),
+        argv=_python_module_argv("_2_EnvelopeSim.GGV.ggv_generation"),
     ),
     "run-ymd": ActionSpec(
         id="run-ymd",
         label="Run YMD",
-        argv=(PYTHON, "-m", "_2_EnvelopeSim.YMD.ymd_generation"),
+        argv=_python_module_argv("_2_EnvelopeSim.YMD.ymd_generation"),
     ),
     "run-review": ActionSpec(
         id="run-review",
         label="Run VehicleReview",
-        argv=(PYTHON, "-m", "_2_EnvelopeSim.VehicleReview.vehicle_review_sim"),
+        argv=_python_module_argv("_2_EnvelopeSim.VehicleReview.vehicle_review_sim"),
     ),
     "run-opt-standard": ActionSpec(
         id="run-opt-standard",
         label="Run StandardSens",
-        argv=(PYTHON, "-m", "StandardSens.pre_screen_sensitivities"),
+        argv=_python_module_argv("StandardSens.pre_screen_sensitivities"),
         env={"PYTHONPATH": f"{ROOT / '_4_OptSim'}:{ROOT}"},
     ),
     "run-opt-envelope": ActionSpec(
         id="run-opt-envelope",
         label="Run EnvelopeSens",
-        argv=(PYTHON, "-m", "EnvelopeSens.sensitivities"),
+        argv=_python_module_argv("EnvelopeSens.sensitivities"),
         env={"PYTHONPATH": f"{ROOT / '_4_OptSim'}:{ROOT}"},
     ),
 }
@@ -3617,13 +3726,19 @@ def run(host: str, port: int) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the BobSim browser app.")
+    parser.add_argument("--run-module", help="Run a bundled Python module and exit.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("module_args", nargs=argparse.REMAINDER)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.run_module:
+        sys.argv = [args.run_module, *args.module_args]
+        runpy.run_module(args.run_module, run_name="__main__", alter_sys=True)
+        return
     run(args.host, args.port)
 
 
