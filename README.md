@@ -63,7 +63,6 @@ make app
 
 Then open `http://127.0.0.1:8765`.
 
-<<<<<<< HEAD
 The app is the primary entry point for normal vehicle-development work. Use it
 to select or edit a vehicle configuration, save the setup, write the generated
 Modelica records into BobLib, configure simulation runs, review logs, and browse
@@ -72,7 +71,7 @@ runtime content and are intentionally ignored by git.
 
 The command-line targets below mirror the same workflow pieces for CI,
 automation, and focused debugging.
-=======
+
 Build the BobDyn desktop deploy artifact:
 
 ```bash
@@ -116,7 +115,6 @@ python _0_Utils/deploy/deploy.py --release --version 2026.06.27 --upload-release
 ```
 
 Uploading requires the GitHub CLI (`gh`) to be installed and authenticated.
->>>>>>> 526a447 (Prepare BobDyn desktop release)
 
 ## Release Checks
 
@@ -194,20 +192,20 @@ Reports and metric CSVs are written under `_3_StandardSim/generated_results/`.
 
 ## Cleanup
 
-Remove local caches and user-generated content such as simulation results, app
-workspaces, saved app results, and cached Modelica builds:
+Remove local Python/tool caches:
 
 ```bash
 make clean
 ```
 
-Use more specific cleanup targets when you only want to clear part of the
-workspace:
+Use more specific cleanup targets when you only want to clear generated workflow
+artifacts:
 
 ```bash
-make clean-caches
+make clean-app
+make clean-visual
 make clean-standard
 make clean-envelope
 make clean-opt
-make clean-app
+make clean-all
 ```

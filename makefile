@@ -68,11 +68,7 @@ CLEAN_DOCKER_IMAGE ?= bobdyn/bobsim:latest
 	standard-eval-ramp-steer standard-eval-steady-state standard-eval-transient standard-eval-four-post standard-eval-all \
 	envelope-ggv envelope-ymd envelope-all \
 	opt-standard opt-envelope opt-refined \
-<<<<<<< HEAD
-	clean clean-caches clean-standard clean-envelope clean-opt clean-app clean-all
-=======
 	clean clean-app clean-visual clean-standard clean-envelope clean-opt clean-owned clean-all
->>>>>>> 526a447 (Prepare BobDyn desktop release)
 
 help:
 	@printf '%s\n' \
@@ -124,15 +120,14 @@ help:
 		'  standard-regression-four-post  Alias for regression-baseline' \
 		'' \
 		'  ci                        Run lint, typecheck, and tests' \
-<<<<<<< HEAD
-		'  clean                     Remove user-generated content and local caches' \
-		'  clean-caches              Remove Python/tool caches only' \
-		'  clean-all                 Alias for clean'
-=======
+		'  clean                     Remove local Python/tool caches' \
 		'  clean-app                 Remove generated app configs/workspaces' \
+		'  clean-visual             Remove generated VisualSim artifacts' \
+		'  clean-standard           Remove generated StandardSim artifacts' \
+		'  clean-envelope           Remove generated EnvelopeSim artifacts' \
+		'  clean-opt                Remove generated OptSim artifacts' \
 		'  clean-owned               Remove root-owned generated artifacts via no-network Docker' \
 		'  clean-all                 Remove caches and generated workflow artifacts'
->>>>>>> 526a447 (Prepare BobDyn desktop release)
 
 init:
 	git submodule update --init --recursive
@@ -248,26 +243,6 @@ opt-envelope:
 opt-refined:
 	$(RUN) env PYTHONPATH=$(WORKSPACE)/_4_OptSim:$(WORKSPACE) $(PYTHON) -m StandardSens.refined_response_surfaces
 
-<<<<<<< HEAD
-clean: clean-caches clean-standard clean-envelope clean-opt clean-app
-
-clean-caches:
-	$(RUN) bash -lc "find $(WORKSPACE) -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null; \
-		find $(WORKSPACE) -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete 2>/dev/null; \
-		rm -rf $(WORKSPACE)/.pytest_cache $(WORKSPACE)/.mypy_cache $(WORKSPACE)/.ruff_cache; \
-		rm -rf $(WORKSPACE)/.coverage $(WORKSPACE)/htmlcov $(WORKSPACE)/build $(WORKSPACE)/dist; \
-		find $(WORKSPACE) -maxdepth 2 -name '*.egg-info' -exec rm -rf {} + 2>/dev/null; \
-		echo 'Python/tool caches cleaned'"
-
-clean-standard:
-	$(RUN) bash -lc "for path in \
-		$(WORKSPACE)/_3_StandardSim/Build \
-		$(WORKSPACE)/_3_StandardSim/BuildBobLib \
-		$(WORKSPACE)/_3_StandardSim/generated_results \
-		$(WORKSPACE)/_3_StandardSim/results; do \
-		if [ -d \"$$path\" ]; then find \"$$path\" -mindepth 1 -maxdepth 1 ! -name '.gitkeep' -exec rm -rf {} +; fi; \
-		done; echo 'StandardSim artifacts cleaned'"
-=======
 clean:
 	bash -lc 'find $(CLEAN_WORKSPACE) -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null; \
 		find $(CLEAN_WORKSPACE) -type f \( -name "*.pyc" -o -name "*.pyo" \) -delete 2>/dev/null; \
@@ -306,7 +281,6 @@ clean-standard:
 		mkdir -p "$$path"; \
 		if [ -d "$$path" ]; then find "$$path" -mindepth 1 -maxdepth 1 ! -name ".gitkeep" -exec rm -rf {} + 2>/dev/null || true; fi; \
 		done; echo "StandardSim artifacts cleaned"'
->>>>>>> 526a447 (Prepare BobDyn desktop release)
 
 clean-envelope:
 	bash -lc 'for path in $(CLEAN_WORKSPACE)/_2_EnvelopeSim/Build $(CLEAN_WORKSPACE)/_2_EnvelopeSim/results; do \
@@ -326,17 +300,6 @@ clean-opt:
 		if [ -d "$$path" ]; then find "$$path" -mindepth 1 -maxdepth 1 ! -name ".gitkeep" -exec rm -rf {} + 2>/dev/null || true; fi; \
 		done; echo "OptSim artifacts cleaned"'
 
-<<<<<<< HEAD
-clean-app:
-	$(RUN) bash -lc "for path in \
-		$(WORKSPACE)/_5_App/build_archive \
-		$(WORKSPACE)/_5_App/saved_results \
-		$(WORKSPACE)/_5_App/vehicle_workspaces; do \
-		if [ -d \"$$path\" ]; then find \"$$path\" -mindepth 1 -maxdepth 1 ! -name '.gitkeep' -exec rm -rf {} +; fi; \
-		done; echo 'App-generated content cleaned'"
-
-clean-all: clean
-=======
 clean-owned:
 	@if command -v docker >/dev/null 2>&1 && docker image inspect $(CLEAN_DOCKER_IMAGE) >/dev/null 2>&1; then \
 		if docker run --rm --network none -v $(CLEAN_WORKSPACE):/workspace -w /workspace $(CLEAN_DOCKER_IMAGE) bash -lc 'for path in \
@@ -372,4 +335,3 @@ clean-owned:
 	fi
 
 clean-all: clean clean-app clean-visual clean-standard clean-envelope clean-opt clean-owned
->>>>>>> 526a447 (Prepare BobDyn desktop release)
