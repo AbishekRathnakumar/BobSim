@@ -51,14 +51,34 @@ Thumbs.db
 
 # Project-generated outputs
 /results/
-_2_EnvelopeSim/results/*
+_2_EnvelopeSim/results/**
+!_2_EnvelopeSim/results/
 !_2_EnvelopeSim/results/.gitkeep
+_3_StandardSim/Build/
+_3_StandardSim/BuildBobLib/
+_3_StandardSim/generated_results/**
+!_3_StandardSim/generated_results/
+!_3_StandardSim/generated_results/.gitkeep
+_3_StandardSim/results/**
+!_3_StandardSim/results/
+!_3_StandardSim/results/.gitkeep
 _4_OptSim/Build/
-_4_OptSim/results/
+_4_OptSim/results/**
+!_4_OptSim/results/
+!_4_OptSim/results/.gitkeep
 _4_OptSim/population/
 _4_OptSim/population_refined/
-_4_OptSim/StandardSensitivities/results/
-_4_OptSim/EnvelopeSensitivities/results/
+_4_OptSim/StandardSens/results/
+_4_OptSim/EnvelopeSens/results/
+_5_App/build_archive/**
+!_5_App/build_archive/
+!_5_App/build_archive/.gitkeep
+_5_App/saved_results/**
+!_5_App/saved_results/
+!_5_App/saved_results/.gitkeep
+_5_App/vehicle_workspaces/**
+!_5_App/vehicle_workspaces/
+!_5_App/vehicle_workspaces/.gitkeep
 
 # BobLib is tracked as a git submodule (gitlink mode 160000);
 # keep this path visible even if future broad rules are added.

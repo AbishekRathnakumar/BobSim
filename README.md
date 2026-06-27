@@ -20,12 +20,15 @@ is healthy.
 - `_1_VisualSim/`: experimental/offline visualization tooling; core model
   visualization currently happens in OMEdit.
 - `_2_EnvelopeSim/`: GGV/YMD performance-envelope workflows.
-- `_3_StandardSim/`: standard vehicle studies: SteadyStateEval, TransientEval,
-  and FourPostEval.
+- `_3_StandardSim/`: standard vehicle studies: RampSteerEval, SteadyStateEval,
+  TransientEval, and FourPostEval.
 - `_4_OptSim/`: sensitivity and response-surface workflows.
+- `_5_App/`: local browser app for configuring setups, launching workflows, and
+  inspecting generated reports, metrics, configs, and job logs.
 - `tests/`: release-polish and workflow regression checks.
-- `vehicle.yml`: active vehicle configuration copied into BobLib generation
-  inputs by the build targets.
+- `vehicle.yml`: active vehicle data used by BobSim projection, reporting, and
+  sensitivity workflows. The Modelica standard entry points now use checked-in
+  `BobLib` records.
 
 ## Quick Start
 
@@ -50,9 +53,17 @@ make help
 The Docker image is based on OpenModelica and installs the Python dependencies
 from `requirements.txt`.
 
+Start the local browser app:
+
+```bash
+make app
+```
+
+Then open `http://127.0.0.1:8765`.
+
 ## Release Checks
 
-Run the local release gate:
+Run the local fast CI gate:
 
 ```bash
 make ci
@@ -64,8 +75,17 @@ This runs:
 - `make typecheck`
 - `make test`
 
-GitHub Actions runs the same make targets directly on the runner with the BobLib
-submodule checked out recursively.
+GitHub Actions runs the same fast gate inside the BobSim Docker image with the
+BobLib submodule checked out recursively. Full StandardSim baseline simulations
+are intentionally left out of normal GitHub CI because they can exceed hosted
+runner limits.
+
+Run the full StandardSim baseline explicitly when you need to refresh or review
+simulation artifacts:
+
+```bash
+make regression-baseline
+```
 
 ## Target Language
 
@@ -86,13 +106,14 @@ Run the complete standard baseline:
 make standard-eval-all
 ```
 
-That target builds missing executables, then runs SteadyStateEval,
-TransientEval, and FourPostEval.
+That target builds missing executables, then runs RampSteerEval,
+SteadyStateEval, TransientEval, and FourPostEval.
 
 For focused standard work, build and run individual studies:
 
 ```bash
 make standard-build
+make standard-eval-ramp-steer
 make standard-eval-steady-state
 make standard-eval-transient
 

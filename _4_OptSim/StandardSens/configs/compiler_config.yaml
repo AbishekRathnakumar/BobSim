@@ -12,12 +12,12 @@ max_workers: 8  # 8 for the Framework 16 goat
 
 standards:
   SteadyStateEval:
-    model: BobLib.Standards.VehicleSim
+    model: BobLib.Experiments.Standards.VehicleSim
     # SteadyStateEval simulation settings live in:
     #   _3_StandardSim/SteadyStateEval/steady_state_eval_config.yml
 
   # KnC_Fr:
-  #   model: BobLib.Standards.FrKnC
+  #   model: BobLib.Experiments.Standards.FourPostSim
   #   start_time: 0
   #   stop_time: 91
   #   intervals: 0
@@ -25,7 +25,7 @@ standards:
   #   solver: dassl
 
   # KnC_Rr:
-  #   model: BobLib.Standards.RrKnC
+  #   model: BobLib.Experiments.Standards.FourPostSim
   #   start_time: 0
   #   stop_time: 91
   #   intervals: 0
