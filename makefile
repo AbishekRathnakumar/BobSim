@@ -173,7 +173,7 @@ typecheck:
 		--exclude '(^|/)$(BOBLIB_PATH)/'
 
 test:
-	$(RUN) env BOBSIM_BASELINE_REGRESSION=1 $(PYTHON) -m pytest tests
+	$(RUN) $(PYTHON) -m pytest tests
 
 regression-invariants:
 	$(RUN) $(PYTHON) -m pytest tests/test_simulation_regression.py
