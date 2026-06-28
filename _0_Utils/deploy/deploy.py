@@ -297,6 +297,7 @@ def clean_generated_artifacts(include_deploy: bool = True) -> None:
     for path in (
         "_5_App/build_archive",
         "_5_App/saved_results",
+        "_5_App/settings",
         "_5_App/vehicle_workspaces",
         "_1_VisualSim/results",
         "_2_EnvelopeSim/Build",

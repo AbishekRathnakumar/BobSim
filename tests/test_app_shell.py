@@ -11,6 +11,17 @@ from _0_Utils.deploy import deploy
 from _5_App import app
 
 
+def clear_openmodelica_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    app.OPENMODELICA_VERIFY_CACHE.clear()
+    for key in {
+        *app.OPENMODELICA_OMC_ENV_KEYS,
+        *app.OPENMODELICA_HOME_ENV_KEYS,
+        *app.OPENMODELICA_LIBRARY_ENV_KEYS,
+    }:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(app, "_read_openmodelica_settings", lambda: {})
+
+
 def test_app_status_exposes_bobsim_workflows_and_boblib_state() -> None:
     payload = app.status_payload()
 
@@ -46,14 +57,72 @@ def test_app_workflow_actions_are_allowlisted() -> None:
         assert not Path(action.argv[0]).is_absolute() or action.argv[0] == app.PYTHON
 
 
-def test_frozen_desktop_uses_local_openmodelica_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_desktop_reports_missing_openmodelica_without_running_builds(monkeypatch: pytest.MonkeyPatch) -> None:
+    clear_openmodelica_settings(monkeypatch)
     monkeypatch.setattr(app, "FROZEN_APP", True)
-    monkeypatch.setattr(app.shutil, "which", lambda name: "/usr/bin/omc" if name == "omc" else None)
+    monkeypatch.setattr(app.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(app, "_common_omc_candidates", lambda _home=None: [])
+
+    payload = app.external_toolchain_payload()
+    assert payload["enabled"] is True
+    assert payload["available"] is False
+    assert (
+        payload["reason"]
+        == "OpenModelica was not auto-detected. Select an OpenModelica toolchain before running simulations."
+    )
+
+    workflow = next(workflow for workflow in app.WORKFLOWS if workflow.id == "ramp-steer")
+    workflow_json = app.workflow_payload(workflow)
+    assert workflow_json["available"] is False
+    assert workflow_json["unavailable_reason"] == payload["reason"]
+
+    with pytest.raises(RuntimeError, match="OpenModelica was not auto-detected"):
+        app.start_workflow("ramp-steer")
+
+
+def write_fake_openmodelica_library(library: Path) -> None:
+    for package_name in app.OPENMODELICA_REQUIRED_LIBRARIES:
+        package_dir = library / package_name
+        package_dir.mkdir(parents=True, exist_ok=True)
+        (package_dir / "package.mo").write_text(f"package {package_name}\nend {package_name};\n", encoding="utf-8")
+
+
+def fake_omc_version_run(*_args: object, **_kwargs: object) -> object:
+    return type("Completed", (), {"returncode": 0, "stdout": "OpenModelica v1.26.0\n"})()
+
+
+def fake_openmodelica_install(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, Path, Path]:
+    home = tmp_path / "OpenModelica"
+    omc = home / "bin" / ("omc.exe" if app.platform.system() == "Windows" else "omc")
+    library = home / "lib" / "omlibrary"
+    omc.parent.mkdir(parents=True)
+    library.mkdir(parents=True)
+    omc.write_text("#!/bin/sh\n", encoding="utf-8")
+    omc.chmod(0o755)
+    write_fake_openmodelica_library(library)
+    monkeypatch.setattr(app.shutil, "which", lambda name: str(omc) if name == "omc" else None)
+    monkeypatch.setattr(app, "_common_omc_candidates", lambda _home=None: [omc])
+    monkeypatch.setattr(app, "_common_openmodelica_libraries", lambda _home=None: [library])
+    monkeypatch.setattr(app.subprocess, "run", fake_omc_version_run)
+    return home, omc, library
+
+
+def test_frozen_desktop_uses_local_openmodelica_when_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_openmodelica_settings(monkeypatch)
+    monkeypatch.setattr(app, "FROZEN_APP", True)
+    _home, omc, _library = fake_openmodelica_install(tmp_path, monkeypatch)
 
     payload = app.external_toolchain_payload()
     assert payload["enabled"] is True
     assert payload["available"] is True
     assert payload["frozen"] is True
+    assert payload["omc"] == str(omc)
     assert "enable_env" not in payload
     assert app.action_available(app.ACTION_SPECS["build-vehicle"]) is True
 
@@ -63,22 +132,65 @@ def test_frozen_desktop_uses_local_openmodelica_when_available(monkeypatch: pyte
     assert workflow_json["unavailable_reason"] == ""
 
 
-def test_desktop_reports_missing_openmodelica_without_running_builds(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app, "FROZEN_APP", True)
+def test_openmodelica_auto_detection_verifies_available_toolchain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_openmodelica_settings(monkeypatch)
+    _home, omc, library = fake_openmodelica_install(tmp_path, monkeypatch)
+
+    payload = app.external_toolchain_payload()
+
+    assert payload["available"] is True
+    assert payload["selected"] is True
+    assert payload["saved"] is False
+    assert payload["verified"] is True
+    assert payload["omc"] == str(omc)
+    assert payload["openmodelica_library"] == str(library)
+    assert payload["settings"] == {}
+    assert payload["detected_settings"]["omc_path"] == str(omc)
+    assert payload["omc_version"] == "OpenModelica v1.26.0"
+
+
+def test_openmodelica_settings_override_omc_and_library_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_openmodelica_settings(monkeypatch)
+    home = tmp_path / "OpenModelica"
+    omc = home / "bin" / ("omc.exe" if app.platform.system() == "Windows" else "omc")
+    library = home / "lib" / "omlibrary"
+    omc.parent.mkdir(parents=True)
+    library.mkdir(parents=True)
+    omc.write_text("#!/bin/sh\n", encoding="utf-8")
+    omc.chmod(0o755)
+    write_fake_openmodelica_library(library)
+    monkeypatch.setattr(
+        app,
+        "_read_openmodelica_settings",
+        lambda: {
+            "omc_path": str(omc),
+            "library_path": str(library),
+            "verified_at": "2026-06-28T00:00:00Z",
+            "omc_version": "OpenModelica v1.26.0",
+        },
+    )
     monkeypatch.setattr(app.shutil, "which", lambda _name: None)
 
     payload = app.external_toolchain_payload()
-    assert payload["enabled"] is True
-    assert payload["available"] is False
-    assert payload["reason"] == "OpenModelica was not found. Install OpenModelica to build and run simulations locally."
 
-    workflow = next(workflow for workflow in app.WORKFLOWS if workflow.id == "ramp-steer")
-    workflow_json = app.workflow_payload(workflow)
-    assert workflow_json["available"] is False
-    assert workflow_json["unavailable_reason"] == payload["reason"]
+    assert payload["available"] is True
+    assert payload["omc"] == str(omc)
+    assert payload["omc_source"] == "saved"
+    assert payload["openmodelica_library"] == str(library)
+    assert payload["openmodelica_library_source"] == "saved"
+    assert app._action_argv(app.ACTION_SPECS["build-vehicle"])[0] == str(omc)
 
-    with pytest.raises(RuntimeError, match="OpenModelica was not found"):
-        app.start_workflow("ramp-steer")
+    env: dict[str, str] = {}
+    app._apply_openmodelica_env(env)
+    assert env["OPENMODELICAHOME"] == str(home)
+    assert env["OPENMODELICALIBRARY"] == str(library)
+    assert str(library) in env["MODELICAPATH"].split(app.os.pathsep)
 
 
 def test_deploy_does_not_bundle_generated_modelica_binaries() -> None:
@@ -292,8 +404,9 @@ def test_app_archives_and_restores_matching_modelica_builds(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    clear_openmodelica_settings(monkeypatch)
     monkeypatch.setattr(app, "ROOT", tmp_path)
-    monkeypatch.setattr(app.shutil, "which", lambda name: "/usr/bin/omc" if name == "omc" else None)
+    fake_openmodelica_install(tmp_path, monkeypatch)
     (tmp_path / "vehicle.yml").write_text("vehicle:\n  name: CacheCar\n", encoding="utf-8")
     script_path = tmp_path / "_3_StandardSim/build_vehicle_sim.mos"
     script_path.parent.mkdir(parents=True)

@@ -35,6 +35,7 @@
               <span>FourPostSim</span>
             </div>
           </div>
+          <button id="toolchain-settings-btn" class="ghost-button" type="button">OpenModelica</button>
           <button id="theme-toggle-btn" class="ghost-button" type="button">Dark</button>
           <button id="refresh-btn" class="ghost-button" type="button">Refresh</button>
         </div>
@@ -444,6 +445,49 @@
           </div>
           <div id="job-list" class="job-list"></div>
           <pre id="job-log" class="log-view"></pre>
+        </div>
+      </div>
+    </div>
+
+    <div id="toolchain-modal" class="simulation-modal" role="dialog" aria-modal="true" aria-labelledby="toolchain-modal-title" hidden>
+      <div class="simulation-modal-card toolchain-modal-card">
+        <div class="simulation-modal-head">
+          <div>
+            <span class="context-label">OpenModelica</span>
+            <h2 id="toolchain-modal-title">Toolchain</h2>
+            <p id="toolchain-modal-subtitle"></p>
+          </div>
+          <div class="simulation-run-actions">
+            <button id="toolchain-reset-btn" class="ghost-button" type="button">Auto</button>
+            <button id="toolchain-save-btn" class="run-button" type="button">Save</button>
+            <button id="toolchain-close-btn" class="ghost-button" type="button">Close</button>
+          </div>
+        </div>
+        <div class="toolchain-modal-body">
+          <div class="toolchain-status-grid">
+            <div>
+              <span>omc</span>
+              <strong id="toolchain-active-omc"></strong>
+            </div>
+            <div>
+              <span>Libraries</span>
+              <strong id="toolchain-active-library"></strong>
+            </div>
+          </div>
+          <label class="toolchain-field">
+            <span>omc executable</span>
+            <input id="toolchain-omc-input" class="name-input" type="text" spellcheck="false" autocomplete="off">
+          </label>
+          <label class="toolchain-field">
+            <span>OpenModelica home</span>
+            <input id="toolchain-home-input" class="name-input" type="text" spellcheck="false" autocomplete="off">
+          </label>
+          <label class="toolchain-field">
+            <span>Library directory</span>
+            <input id="toolchain-library-input" class="name-input" type="text" spellcheck="false" autocomplete="off">
+          </label>
+          <div id="toolchain-candidates" class="toolchain-candidates"></div>
+          <div id="toolchain-status" class="sim-config-status"></div>
         </div>
       </div>
     </div>

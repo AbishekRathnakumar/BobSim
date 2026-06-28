@@ -255,6 +255,7 @@ clean-app:
 	bash -lc 'for path in \
 		$(CLEAN_WORKSPACE)/_5_App/build_archive \
 		$(CLEAN_WORKSPACE)/_5_App/saved_results \
+		$(CLEAN_WORKSPACE)/_5_App/settings \
 		$(CLEAN_WORKSPACE)/_5_App/vehicle_workspaces; do \
 		mkdir -p "$$path"; \
 		find "$$path" -mindepth 1 -maxdepth 1 ! -name ".gitkeep" -exec rm -rf {} + 2>/dev/null || true; \
@@ -318,6 +319,7 @@ clean-owned:
 			_4_OptSim/results \
 			_5_App/build_archive \
 			_5_App/saved_results \
+			_5_App/settings \
 			_5_App/vehicle_workspaces; do \
 			mkdir -p "$$path"; \
 			find "$$path" -mindepth 1 -maxdepth 1 ! -name ".gitkeep" -exec rm -rf {} +; \

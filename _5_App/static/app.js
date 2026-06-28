@@ -74,6 +74,10 @@ const state = {
   selectedWorkflowId: null,
   selectedStudyWorkflowId: null,
   selectedJobId: null,
+  toolchainModalOpen: false,
+  toolchainSaving: false,
+  toolchainInputsDirty: false,
+  toolchainStatusMessage: "",
   activeSimTab: "setup",
   simModalOpen: false,
   activeStudyTab: "explore",
@@ -822,6 +826,7 @@ function render() {
   renderMode();
   renderSetup();
   renderStandard();
+  renderToolchainModal();
   renderStudies();
   renderRailActions();
   renderVehicleStartModal();
@@ -831,6 +836,11 @@ function render() {
 function renderTopbar() {
   const repo = state.status?.repo;
   document.getElementById("repo-root").textContent = repo?.root ? "Local BobSim workspace" : "";
+  const toolchainButton = document.getElementById("toolchain-settings-btn");
+  if (toolchainButton) {
+    const toolchain = openmodelicaToolchain();
+    toolchainButton.title = toolchain.reason || "OpenModelica toolchain";
+  }
   renderModelicaStack();
 }
 
@@ -3500,6 +3510,175 @@ function updateActiveTirParameter(key, value) {
   if (editor) editor.value = state.activeTir.text;
   state.tireStatusMessage = "";
   renderTirActionState();
+}
+
+function openModelicaToolchain() {
+  state.toolchainModalOpen = true;
+  state.toolchainInputsDirty = false;
+  state.toolchainStatusMessage = "";
+  renderToolchainModal();
+}
+
+function closeModelicaToolchain() {
+  state.toolchainModalOpen = false;
+  state.toolchainStatusMessage = "";
+  renderToolchainModal();
+}
+
+function openmodelicaToolchain() {
+  return state.status?.external_toolchain || {};
+}
+
+function toolchainSourceLabel(source) {
+  if (!source) return "auto";
+  if (source === "PATH") return "PATH";
+  if (source === "saved") return "saved";
+  if (source === "default") return "default";
+  if (source === "omc") return "inferred";
+  if (source === "omc-default") return "omc default";
+  if (source.startsWith("env:")) return source.slice(4);
+  return source.replaceAll("-", " ");
+}
+
+function toolchainPathLabel(path, source, fallback) {
+  if (!path) return fallback;
+  return `${path} (${toolchainSourceLabel(source)})`;
+}
+
+function existingToolchainCandidates(items = [], current = "") {
+  const seen = new Set();
+  return items
+    .filter((item) => item?.exists && item.path && item.path !== current)
+    .filter((item) => {
+      if (seen.has(item.path)) return false;
+      seen.add(item.path);
+      return true;
+    })
+    .slice(0, 6);
+}
+
+function fillToolchainInputsFromStatus() {
+  const toolchain = openmodelicaToolchain();
+  const settings = toolchain.settings || {};
+  const omcInput = document.getElementById("toolchain-omc-input");
+  const homeInput = document.getElementById("toolchain-home-input");
+  const libraryInput = document.getElementById("toolchain-library-input");
+  if (omcInput) {
+    omcInput.value = settings.omc_path || "";
+    omcInput.placeholder = toolchain.omc || "Auto-detect omc";
+  }
+  if (homeInput) {
+    homeInput.value = settings.openmodelica_home || "";
+    homeInput.placeholder = toolchain.openmodelica_home || "Infer from omc";
+  }
+  if (libraryInput) {
+    libraryInput.value = settings.library_path || "";
+    libraryInput.placeholder = toolchain.openmodelica_library || "Use omc defaults";
+  }
+}
+
+function renderToolchainCandidates(toolchain) {
+  const container = document.getElementById("toolchain-candidates");
+  if (!container) return;
+  const omcCandidates = existingToolchainCandidates(toolchain.omc_candidates, toolchain.settings?.omc_path || toolchain.omc);
+  const libraryCandidates = existingToolchainCandidates(
+    toolchain.library_candidates,
+    toolchain.settings?.library_path || toolchain.openmodelica_library,
+  );
+  const buttons = [
+    ...omcCandidates.map((item) => ({ field: "toolchain-omc-input", label: `omc: ${item.path}`, path: item.path })),
+    ...libraryCandidates.map((item) => ({ field: "toolchain-library-input", label: `lib: ${item.path}`, path: item.path })),
+  ];
+  container.innerHTML = buttons.map((button) => `
+    <button class="ghost-button" type="button" data-toolchain-field="${escapeHtml(button.field)}" data-toolchain-path="${escapeHtml(button.path)}" title="${escapeHtml(button.path)}">${escapeHtml(button.label)}</button>
+  `).join("");
+  container.querySelectorAll("[data-toolchain-field]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = document.getElementById(button.dataset.toolchainField);
+      if (!input) return;
+      input.value = button.dataset.toolchainPath || "";
+      state.toolchainInputsDirty = true;
+    });
+  });
+}
+
+function renderToolchainModal() {
+  const modal = document.getElementById("toolchain-modal");
+  if (!modal) return;
+  modal.hidden = !state.toolchainModalOpen;
+  if (!state.toolchainModalOpen) return;
+
+  const toolchain = openmodelicaToolchain();
+  const subtitle = document.getElementById("toolchain-modal-subtitle");
+  const activeOmc = document.getElementById("toolchain-active-omc");
+  const activeLibrary = document.getElementById("toolchain-active-library");
+  const saveButton = document.getElementById("toolchain-save-btn");
+  const resetButton = document.getElementById("toolchain-reset-btn");
+  const status = document.getElementById("toolchain-status");
+
+  if (subtitle) subtitle.textContent = toolchain.reason || "";
+  if (activeOmc) {
+    activeOmc.textContent = toolchainPathLabel(toolchain.omc, toolchain.omc_source, "Not found");
+  }
+  if (activeLibrary) {
+    activeLibrary.textContent = toolchainPathLabel(
+      toolchain.openmodelica_library,
+      toolchain.openmodelica_library_source,
+      "omc default",
+    );
+  }
+  if (!state.toolchainInputsDirty) fillToolchainInputsFromStatus();
+  renderToolchainCandidates(toolchain);
+  if (saveButton) saveButton.disabled = state.toolchainSaving;
+  if (resetButton) resetButton.disabled = state.toolchainSaving;
+  if (status) status.textContent = state.toolchainSaving ? "Saving." : state.toolchainStatusMessage;
+}
+
+async function saveOpenModelicaToolchain() {
+  const payload = {
+    omc_path: document.getElementById("toolchain-omc-input")?.value || "",
+    openmodelica_home: document.getElementById("toolchain-home-input")?.value || "",
+    library_path: document.getElementById("toolchain-library-input")?.value || "",
+  };
+  state.toolchainSaving = true;
+  state.toolchainStatusMessage = "";
+  renderToolchainModal();
+  try {
+    state.status.external_toolchain = await api("/api/toolchain/openmodelica", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    state.toolchainInputsDirty = false;
+    state.toolchainStatusMessage = "Saved.";
+    await refreshStatus();
+  } catch (error) {
+    state.toolchainStatusMessage = error.message;
+  } finally {
+    state.toolchainSaving = false;
+    render();
+  }
+}
+
+async function resetOpenModelicaToolchain() {
+  state.toolchainSaving = true;
+  state.toolchainStatusMessage = "";
+  renderToolchainModal();
+  try {
+    state.status.external_toolchain = await api("/api/toolchain/openmodelica", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reset: true }),
+    });
+    state.toolchainInputsDirty = false;
+    state.toolchainStatusMessage = "Auto detection restored.";
+    await refreshStatus();
+  } catch (error) {
+    state.toolchainStatusMessage = error.message;
+  } finally {
+    state.toolchainSaving = false;
+    render();
+  }
 }
 
 function renderStandard() {
@@ -12337,6 +12516,18 @@ function wireEvents() {
   document.getElementById("simulation-config-modal").addEventListener("pointerdown", (event) => {
     if (event.target.id === "simulation-config-modal") closeSimulationModal();
   });
+  document.getElementById("toolchain-settings-btn").addEventListener("click", openModelicaToolchain);
+  document.getElementById("toolchain-close-btn").addEventListener("click", closeModelicaToolchain);
+  document.getElementById("toolchain-save-btn").addEventListener("click", saveOpenModelicaToolchain);
+  document.getElementById("toolchain-reset-btn").addEventListener("click", resetOpenModelicaToolchain);
+  document.getElementById("toolchain-modal").addEventListener("pointerdown", (event) => {
+    if (event.target.id === "toolchain-modal") closeModelicaToolchain();
+  });
+  ["toolchain-omc-input", "toolchain-home-input", "toolchain-library-input"].forEach((id) => {
+    document.getElementById(id).addEventListener("input", () => {
+      state.toolchainInputsDirty = true;
+    });
+  });
   document.getElementById("architecture-connection-close").addEventListener("click", closeArchitectureConnectionModal);
   document.getElementById("architecture-connection-modal").addEventListener("pointerdown", (event) => {
     if (event.target.id === "architecture-connection-modal") closeArchitectureConnectionModal();
@@ -12413,6 +12604,11 @@ function wireEvents() {
   });
   document.getElementById("geometry-plot-canvas").addEventListener("click", handleGeometryPlotClick);
   window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.toolchainModalOpen) {
+      closeModelicaToolchain();
+      event.preventDefault();
+      return;
+    }
     if (event.key === "Escape" && state.simModalOpen) {
       closeSimulationModal();
       event.preventDefault();

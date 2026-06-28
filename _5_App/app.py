@@ -19,7 +19,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import parse_qs, unquote, urlparse
 import uuid
 import re
@@ -107,6 +107,7 @@ def _seed_runtime_root(runtime_root: Path) -> None:
         "_4_OptSim/population_refined",
         "_5_App/build_archive",
         "_5_App/saved_results",
+        "_5_App/settings",
         "_5_App/sim_configs",
         "_5_App/vehicle_configs",
         "_5_App/vehicle_workspaces",
@@ -149,6 +150,8 @@ SAVED_SIM_CONFIG_ROOT = Path("_5_App/sim_configs")
 SAVED_RESULTS_ROOT = Path("_5_App/saved_results")
 VEHICLE_WORKSPACE_ROOT = Path("_5_App/vehicle_workspaces")
 BUILD_ARCHIVE_ROOT = Path("_5_App/build_archive")
+SETTINGS_ROOT = Path("_5_App/settings")
+OPENMODELICA_SETTINGS_PATH = SETTINGS_ROOT / "openmodelica.json"
 RESULT_EXPLORER_ROOTS = (
     Path("_3_StandardSim/generated_results"),
     Path("_3_StandardSim/results"),
@@ -162,6 +165,17 @@ RESULT_EXPLORER_ROOTS = (
     VEHICLE_WORKSPACE_ROOT,
 )
 MAX_LOG_CHARS = 120_000
+OPENMODELICA_OMC_ENV_KEYS = ("BOBSIM_OMC", "BOBDYN_OMC", "OMC")
+OPENMODELICA_HOME_ENV_KEYS = ("BOBSIM_OPENMODELICA_HOME", "BOBDYN_OPENMODELICA_HOME", "OPENMODELICAHOME")
+OPENMODELICA_LIBRARY_ENV_KEYS = (
+    "BOBSIM_OPENMODELICA_LIBRARY",
+    "BOBDYN_OPENMODELICA_LIBRARY",
+    "OPENMODELICALIBRARY",
+    "MODELICAPATH",
+)
+OPENMODELICA_REQUIRED_LIBRARIES = ("Modelica", "VehicleInterfaces")
+OPENMODELICA_VERIFY_TIMEOUT_S = 12
+OPENMODELICA_VERIFY_CACHE: dict[str, dict[str, Any]] = {}
 
 
 @dataclass(frozen=True)
@@ -430,25 +444,482 @@ def external_toolchain_enabled() -> bool:
     return True
 
 
+def _clean_path_string(value: Any) -> str:
+    if value is None:
+        return ""
+    return os.path.expandvars(os.path.expanduser(str(value).strip()))
+
+
+def _path_list_value(value: str) -> list[str]:
+    return [part for part in value.split(os.pathsep) if part.strip()]
+
+
+def _dedupe_paths(paths: Iterable[Path]) -> list[Path]:
+    seen: set[str] = set()
+    deduped: list[Path] = []
+    for path in paths:
+        key = str(path).casefold() if platform.system() == "Windows" else str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped
+
+
+def _openmodelica_executable_name() -> str:
+    return "omc.exe" if platform.system() == "Windows" else "omc"
+
+
+def _openmodelica_settings_file() -> Path:
+    return ROOT / OPENMODELICA_SETTINGS_PATH
+
+
+def _read_openmodelica_settings() -> dict[str, str]:
+    path = _openmodelica_settings_file()
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return {}
+    settings: dict[str, str] = {}
+    for key in ("omc_path", "openmodelica_home", "library_path", "verified_at", "omc_version"):
+        value = _clean_path_string(data.get(key))
+        if value:
+            settings[key] = value
+    return settings
+
+
+def _write_openmodelica_settings(settings: dict[str, str]) -> None:
+    path = _openmodelica_settings_file()
+    if not settings:
+        _remove_file(path)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+
+
+def _remove_file(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _first_env_value(keys: Iterable[str]) -> tuple[str, str] | tuple[None, None]:
+    for key in keys:
+        value = _clean_path_string(os.environ.get(key))
+        if value:
+            return value, f"env:{key}"
+    return None, None
+
+
+def _configured_path(
+    settings: dict[str, str],
+    setting_key: str,
+    env_keys: Iterable[str],
+) -> tuple[str, str] | tuple[None, None]:
+    value = _clean_path_string(settings.get(setting_key))
+    if value:
+        return value, "saved"
+    return _first_env_value(env_keys)
+
+
+def _path_info(path: str | Path | None, source: str, *, error: str = "") -> dict[str, Any]:
+    if path is None:
+        return {"path": None, "source": source, "exists": False, "error": error}
+    candidate = Path(path)
+    exists = candidate.exists()
+    return {"path": str(candidate), "source": source, "exists": exists, "error": error}
+
+
+def _program_files_dirs() -> list[Path]:
+    roots = []
+    for key in ("ProgramFiles", "ProgramFiles(x86)"):
+        value = _clean_path_string(os.environ.get(key))
+        if value:
+            roots.append(Path(value))
+    roots.extend([Path("C:/Program Files"), Path("C:/Program Files (x86)")])
+    return _dedupe_paths(roots)
+
+
+def _common_openmodelica_homes() -> list[Path]:
+    system = platform.system()
+    homes: list[Path] = []
+    if system == "Windows":
+        for root in _program_files_dirs():
+            if root.exists():
+                homes.extend(sorted(root.glob("OpenModelica*")))
+        homes.extend([Path("C:/OpenModelica"), Path("C:/Program Files/OpenModelica")])
+    elif system == "Darwin":
+        homes.extend(
+            [
+                Path("/Applications/OpenModelica.app/Contents/Resources"),
+                Path("/opt/openmodelica"),
+                Path("/opt/homebrew"),
+                Path("/usr/local"),
+            ]
+        )
+    else:
+        homes.extend([Path("/usr"), Path("/usr/local"), Path("/opt/openmodelica"), Path("/snap/openmodelica/current")])
+    return _dedupe_paths(homes)
+
+
+def _common_omc_candidates(home: str | None = None) -> list[Path]:
+    exe_name = _openmodelica_executable_name()
+    candidates: list[Path] = []
+    if home:
+        candidates.append(Path(home) / "bin" / exe_name)
+    for candidate_home in _common_openmodelica_homes():
+        candidates.append(candidate_home / "bin" / exe_name)
+    if platform.system() != "Windows":
+        candidates.extend([Path("/usr/bin/omc"), Path("/usr/local/bin/omc"), Path("/opt/openmodelica/bin/omc")])
+    return _dedupe_paths(candidates)
+
+
+def _common_openmodelica_libraries(home: str | None = None) -> list[Path]:
+    candidates: list[Path] = []
+    if home:
+        candidates.append(Path(home) / "lib" / "omlibrary")
+    for candidate_home in _common_openmodelica_homes():
+        candidates.append(candidate_home / "lib" / "omlibrary")
+    if platform.system() != "Windows":
+        candidates.extend(
+            [
+                Path("/usr/lib/omlibrary"),
+                Path("/usr/local/lib/omlibrary"),
+                Path("/opt/openmodelica/lib/omlibrary"),
+            ]
+        )
+    return _dedupe_paths(candidates)
+
+
+def _is_omc_file(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    if platform.system() == "Windows":
+        return path.name.lower() == "omc.exe"
+    return os.access(path, os.X_OK)
+
+
+def _resolve_omc_path(settings: dict[str, str], home: str | None = None) -> dict[str, Any]:
+    configured, source = _configured_path(settings, "omc_path", OPENMODELICA_OMC_ENV_KEYS)
+    if configured:
+        path = Path(configured)
+        error = "" if _is_omc_file(path) else f"Configured omc executable was not found or is not executable: {path}"
+        return _path_info(path, source or "saved", error=error)
+
+    if home:
+        home_candidate = Path(home) / "bin" / _openmodelica_executable_name()
+        if _is_omc_file(home_candidate):
+            return _path_info(home_candidate, "openmodelica-home")
+
+    which_path = shutil.which("omc")
+    if which_path:
+        return {"path": which_path, "source": "PATH", "exists": True, "error": ""}
+
+    for candidate in _common_omc_candidates(home):
+        if _is_omc_file(candidate):
+            return _path_info(candidate, "default")
+    return {
+        "path": None,
+        "source": "not-found",
+        "exists": False,
+        "error": "OpenModelica omc was not found. Install OpenModelica or set the omc path.",
+    }
+
+
+def _infer_openmodelica_home(omc_path: str | None) -> str | None:
+    if not omc_path:
+        return None
+    path = Path(omc_path)
+    if path.parent.name.lower() == "bin":
+        return str(path.parent.parent)
+    return None
+
+
+def _resolve_openmodelica_home(settings: dict[str, str], omc_path: str | None) -> dict[str, Any]:
+    configured, source = _configured_path(settings, "openmodelica_home", OPENMODELICA_HOME_ENV_KEYS)
+    if configured:
+        path = Path(configured)
+        error = "" if path.is_dir() else f"Configured OpenModelica home directory was not found: {path}"
+        return _path_info(path, source or "saved", error=error)
+
+    inferred = _infer_openmodelica_home(omc_path)
+    if inferred and Path(inferred).is_dir():
+        return _path_info(inferred, "omc")
+    if inferred:
+        return _path_info(inferred, "omc")
+    return {"path": None, "source": "not-found", "exists": False, "error": ""}
+
+
+def _configured_library_candidates(settings: dict[str, str]) -> list[tuple[str, str]]:
+    saved = _clean_path_string(settings.get("library_path"))
+    if saved:
+        return [(saved, "saved")]
+    for key in OPENMODELICA_LIBRARY_ENV_KEYS:
+        value = _clean_path_string(os.environ.get(key))
+        if not value:
+            continue
+        if key == "MODELICAPATH":
+            return [(part, f"env:{key}") for part in _path_list_value(value)]
+        return [(value, f"env:{key}")]
+    return []
+
+
+def _resolve_openmodelica_library(settings: dict[str, str], home: str | None) -> dict[str, Any]:
+    configured_candidates = _configured_library_candidates(settings)
+    for configured, source in configured_candidates:
+        path = Path(configured)
+        if path.is_dir():
+            return _path_info(path, source)
+    if configured_candidates:
+        configured, source = configured_candidates[0]
+        path = Path(configured)
+        return _path_info(path, source, error=f"Configured OpenModelica library directory was not found: {path}")
+
+    for candidate in _common_openmodelica_libraries(home):
+        if candidate.is_dir():
+            return _path_info(candidate, "default")
+    return {"path": None, "source": "omc-default", "exists": False, "error": ""}
+
+
+def _openmodelica_selection_complete(settings: dict[str, str]) -> bool:
+    return bool(settings.get("omc_path") and settings.get("library_path"))
+
+
+def _openmodelica_selection_verified(settings: dict[str, str]) -> bool:
+    return bool(settings.get("verified_at") and settings.get("omc_version"))
+
+
+def _library_contains_package(library_path: Path, package_name: str) -> bool:
+    if not library_path.is_dir():
+        return False
+    direct = library_path / package_name / "package.mo"
+    if direct.is_file():
+        return True
+    for child in library_path.glob(f"{package_name}*"):
+        if child.is_dir() and (child / "package.mo").is_file():
+            return True
+    return False
+
+
+def _missing_openmodelica_libraries(library_path: Path) -> list[str]:
+    return [
+        package_name
+        for package_name in OPENMODELICA_REQUIRED_LIBRARIES
+        if not _library_contains_package(library_path, package_name)
+    ]
+
+
+def _apply_openmodelica_env_paths(
+    env: dict[str, str],
+    *,
+    omc_path: str | None,
+    home: str | None,
+    library: str | None,
+) -> None:
+    if omc_path:
+        _prepend_env_path(env, "PATH", [str(Path(str(omc_path)).parent)])
+    if home:
+        env["OPENMODELICAHOME"] = str(home)
+        home_path = Path(str(home))
+        runtime_libs = [str(home_path / "lib"), str(home_path / "lib" / "omc")]
+        if platform.system() == "Darwin":
+            _prepend_env_path(env, "DYLD_LIBRARY_PATH", runtime_libs)
+        elif platform.system() == "Windows":
+            _prepend_env_path(env, "PATH", [str(home_path / "bin"), str(home_path / "lib")])
+        else:
+            _prepend_env_path(env, "LD_LIBRARY_PATH", runtime_libs)
+    if library:
+        env["OPENMODELICALIBRARY"] = str(library)
+        _prepend_env_path(env, "MODELICAPATH", [str(library)])
+
+
+def _verify_openmodelica_selection(settings: dict[str, str]) -> dict[str, str]:
+    omc_path = settings.get("omc_path", "")
+    library_path = settings.get("library_path", "")
+    home_path = settings.get("openmodelica_home", "")
+
+    if not omc_path:
+        raise ValueError("Select an omc executable before enabling Simulation.")
+    if not _is_omc_file(Path(omc_path)):
+        raise ValueError(f"omc executable was not found or is not executable: {omc_path}")
+    if home_path and not Path(home_path).is_dir():
+        raise ValueError(f"OpenModelica home directory was not found: {home_path}")
+    if not library_path:
+        raise ValueError("Select the OpenModelica library directory before enabling Simulation.")
+    library_root = Path(library_path)
+    if not library_root.is_dir():
+        raise ValueError(f"OpenModelica library directory was not found: {library_path}")
+
+    missing_libraries = _missing_openmodelica_libraries(library_root)
+    if missing_libraries:
+        missing = ", ".join(missing_libraries)
+        raise ValueError(f"OpenModelica library directory is missing required packages: {missing}")
+
+    env = os.environ.copy()
+    _apply_openmodelica_env_paths(env, omc_path=omc_path, home=home_path or None, library=library_path)
+    try:
+        completed = subprocess.run(
+            [omc_path, "--version"],
+            cwd=ROOT,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=OPENMODELICA_VERIFY_TIMEOUT_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(f"omc verification timed out after {OPENMODELICA_VERIFY_TIMEOUT_S} seconds.") from exc
+    except OSError as exc:
+        raise ValueError(f"omc verification failed: {exc}") from exc
+
+    output = (completed.stdout or "").strip()
+    if completed.returncode != 0:
+        detail = output or f"exit code {completed.returncode}"
+        raise ValueError(f"omc verification failed: {detail}")
+
+    verified = dict(settings)
+    verified["omc_version"] = output.splitlines()[0].strip() if output else "OpenModelica"
+    verified["verified_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return verified
+
+
+def _openmodelica_verify_cache_key(settings: dict[str, str]) -> str:
+    return "\n".join(
+        [
+            settings.get("omc_path", ""),
+            settings.get("openmodelica_home", ""),
+            settings.get("library_path", ""),
+        ]
+    )
+
+
+def _verify_openmodelica_selection_cached(settings: dict[str, str]) -> tuple[dict[str, str] | None, str]:
+    key = _openmodelica_verify_cache_key(settings)
+    cached = OPENMODELICA_VERIFY_CACHE.get(key)
+    if cached:
+        if cached.get("ok"):
+            return dict(cached["settings"]), ""
+        return None, str(cached.get("error") or "OpenModelica verification failed.")
+    try:
+        verified = _verify_openmodelica_selection(settings)
+    except ValueError as exc:
+        OPENMODELICA_VERIFY_CACHE[key] = {"ok": False, "error": str(exc)}
+        return None, str(exc)
+    OPENMODELICA_VERIFY_CACHE[key] = {"ok": True, "settings": verified}
+    return verified, ""
+
+
+def _openmodelica_settings_from_payload(payload: dict[str, Any]) -> dict[str, str]:
+    requested: dict[str, str] = {}
+    for key in ("omc_path", "openmodelica_home", "library_path"):
+        value = _clean_path_string(payload.get(key))
+        if value:
+            requested[key] = value
+
+    home_hint = requested.get("openmodelica_home")
+    omc = _resolve_omc_path(requested, home_hint)
+    if not requested.get("omc_path") and omc.get("path"):
+        requested["omc_path"] = str(omc["path"])
+
+    home = _resolve_openmodelica_home(requested, requested.get("omc_path"))
+    if not requested.get("openmodelica_home") and home.get("path") and home.get("exists"):
+        requested["openmodelica_home"] = str(home["path"])
+
+    library = _resolve_openmodelica_library(requested, requested.get("openmodelica_home"))
+    if not requested.get("library_path") and library.get("path"):
+        requested["library_path"] = str(library["path"])
+
+    return requested
+
+
+def openmodelica_toolchain_payload() -> dict[str, Any]:
+    saved_settings = _read_openmodelica_settings()
+    detected_settings = _openmodelica_settings_from_payload(saved_settings)
+    home_configured, _home_source = _configured_path(detected_settings, "openmodelica_home", OPENMODELICA_HOME_ENV_KEYS)
+    omc = _resolve_omc_path(detected_settings, home_configured)
+    home = _resolve_openmodelica_home(detected_settings, omc.get("path"))
+    library = _resolve_openmodelica_library(detected_settings, home.get("path"))
+    errors = [item["error"] for item in (omc, home, library) if item.get("error")]
+    selected = _openmodelica_selection_complete(detected_settings)
+    saved = _openmodelica_selection_complete(saved_settings)
+    verified_settings: dict[str, str] | None = None
+    verification_error = ""
+    if selected and not errors:
+        if saved and _openmodelica_selection_verified(saved_settings):
+            verified_settings = {
+                **detected_settings,
+                "verified_at": saved_settings.get("verified_at", ""),
+                "omc_version": saved_settings.get("omc_version", ""),
+            }
+        else:
+            verified_settings, verification_error = _verify_openmodelica_selection_cached(detected_settings)
+    verified = verified_settings is not None
+    available = verified and not errors
+    if available:
+        reason = "OpenModelica toolchain available."
+    elif not selected:
+        reason = "OpenModelica was not auto-detected. Select an OpenModelica toolchain before running simulations."
+    elif errors:
+        reason = errors[0]
+    elif not library.get("path"):
+        reason = "Select the OpenModelica library directory before running simulations."
+    elif verification_error:
+        reason = verification_error
+    else:
+        reason = "OpenModelica toolchain is not ready."
+    return {
+        "available": available,
+        "enabled": external_toolchain_enabled(),
+        "frozen": FROZEN_APP,
+        "selected": selected,
+        "saved": saved,
+        "verified": verified,
+        "verified_at": (verified_settings or detected_settings).get("verified_at"),
+        "omc_version": (verified_settings or detected_settings).get("omc_version"),
+        "omc": omc.get("path"),
+        "omc_source": omc.get("source"),
+        "openmodelica_home": home.get("path"),
+        "openmodelica_home_source": home.get("source"),
+        "openmodelica_library": library.get("path"),
+        "openmodelica_library_source": library.get("source"),
+        "settings": saved_settings,
+        "detected_settings": detected_settings,
+        "env_keys": {
+            "omc": list(OPENMODELICA_OMC_ENV_KEYS),
+            "home": list(OPENMODELICA_HOME_ENV_KEYS),
+            "library": list(OPENMODELICA_LIBRARY_ENV_KEYS),
+        },
+        "omc_candidates": [
+            {"path": str(path), "exists": _is_omc_file(path)}
+            for path in _common_omc_candidates(home.get("path"))
+        ],
+        "library_candidates": [
+            {"path": str(path), "exists": path.is_dir()}
+            for path in _common_openmodelica_libraries(home.get("path"))
+        ],
+        "reason": reason,
+    }
+
+
+def save_openmodelica_toolchain_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("reset"):
+        _write_openmodelica_settings({})
+        return openmodelica_toolchain_payload()
+
+    settings = _verify_openmodelica_selection(_openmodelica_settings_from_payload(payload))
+    _write_openmodelica_settings(settings)
+    return openmodelica_toolchain_payload()
+
+
 def external_toolchain_available() -> bool:
-    return external_toolchain_enabled() and shutil.which("omc") is not None
+    return external_toolchain_enabled() and openmodelica_toolchain_payload()["available"]
 
 
 def external_toolchain_payload() -> dict[str, Any]:
-    enabled = external_toolchain_enabled()
-    omc_path = shutil.which("omc")
-    available = enabled and omc_path is not None
-    if available:
-        reason = "OpenModelica toolchain available."
-    else:
-        reason = "OpenModelica was not found. Install OpenModelica to build and run simulations locally."
-    return {
-        "available": available,
-        "enabled": enabled,
-        "frozen": FROZEN_APP,
-        "omc": omc_path,
-        "reason": reason,
-    }
+    return openmodelica_toolchain_payload()
 
 
 def action_available(action: ActionSpec) -> bool:
@@ -3494,13 +3965,43 @@ def _run_modelica_build_action(action: ActionSpec, target: BuildTargetSpec, job_
     return returncode
 
 
+def _prepend_env_path(env: dict[str, str], key: str, paths: Iterable[str]) -> None:
+    current = env.get(key, "")
+    parts = [path for path in paths if path and Path(path).exists()]
+    if current:
+        parts.extend(_path_list_value(current))
+    if parts:
+        env[key] = os.pathsep.join(dict.fromkeys(parts))
+
+
+def _action_argv(action: ActionSpec) -> tuple[str, ...]:
+    if action.requires_external_toolchain and action.argv and action.argv[0] == "omc":
+        omc_path = openmodelica_toolchain_payload().get("omc")
+        if omc_path:
+            return (str(omc_path), *action.argv[1:])
+    return action.argv
+
+
+def _apply_openmodelica_env(env: dict[str, str]) -> None:
+    toolchain = openmodelica_toolchain_payload()
+    _apply_openmodelica_env_paths(
+        env,
+        omc_path=toolchain.get("omc"),
+        home=toolchain.get("openmodelica_home"),
+        library=toolchain.get("openmodelica_library"),
+    )
+
+
 def _run_subprocess_action(action: ActionSpec, job_id: str) -> int:
     env = os.environ.copy()
     env.update(action.env)
     env.setdefault("PYTHONUNBUFFERED", "1")
-    JOBS.append_log(job_id, f"\n$ {' '.join(action.argv)}\n")
+    if action.requires_external_toolchain:
+        _apply_openmodelica_env(env)
+    argv = _action_argv(action)
+    JOBS.append_log(job_id, f"\n$ {' '.join(argv)}\n")
     with subprocess.Popen(
-        action.argv,
+        argv,
         cwd=ROOT,
         env=env,
         stdout=subprocess.PIPE,
@@ -3633,6 +4134,8 @@ class BobSimHandler(BaseHTTPRequestHandler):
                 self._send_json(_csv_preview(path))
             elif parsed.path == "/api/jobs":
                 self._send_json({"jobs": JOBS.list()})
+            elif parsed.path == "/api/toolchain/openmodelica":
+                self._send_json(openmodelica_toolchain_payload())
             elif parsed.path.startswith("/api/jobs/"):
                 job_id = parsed.path.rsplit("/", 1)[-1]
                 job = JOBS.get(job_id)
@@ -3655,6 +4158,9 @@ class BobSimHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/jobs":
                 job = start_job(str(body.get("action_id", "")))
                 self._send_json(job, status=HTTPStatus.CREATED)
+            elif parsed.path == "/api/toolchain/openmodelica":
+                payload = save_openmodelica_toolchain_settings(body)
+                self._send_json(payload)
             elif parsed.path.startswith("/api/workflows/") and parsed.path.endswith("/run"):
                 workflow_id = parsed.path.removeprefix("/api/workflows/").removesuffix("/run").strip("/")
                 job = start_workflow(workflow_id)
