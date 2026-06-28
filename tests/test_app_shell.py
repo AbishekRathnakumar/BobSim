@@ -378,6 +378,38 @@ def test_modelica_build_action_fails_when_artifacts_are_missing(
     assert "Stopping before simulation run" in app.JOBS.get(job["id"])["log"]
 
 
+def test_modelica_build_action_creates_build_directory_before_omc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_openmodelica_settings(monkeypatch)
+    monkeypatch.setattr(app, "ROOT", tmp_path)
+    fake_openmodelica_install(tmp_path, monkeypatch)
+    (tmp_path / "vehicle.yml").write_text("vehicle:\n  name: DirectoryCar\n", encoding="utf-8")
+    target = app.MODELICA_BUILD_TARGETS["vehicle"]
+    script_path = tmp_path / target.script
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text("// fake build script\n", encoding="utf-8")
+    stack = {
+        "written_to_boblib": False,
+        "latest_modified": 1.0,
+        "signatures": {"vehicle": {"generated": "generated-vehicle-signature"}},
+    }
+    monkeypatch.setattr(app, "modelica_stack_status_payload", lambda _vehicle_path, _root: stack)
+
+    def fake_build(_action: app.ActionSpec, _job_id: str) -> int:
+        assert (tmp_path / target.build_dir).is_dir()
+        return 0
+
+    monkeypatch.setattr(app, "_run_subprocess_action", fake_build)
+
+    job = app.JOBS.create("build-vehicle", "Build VehicleSim", [])
+    returncode = app._run_action_process(app.ACTION_SPECS["build-vehicle"], job["id"])
+
+    assert returncode == 0
+    assert f"Ensured {target.label} build directory" in app.JOBS.get(job["id"])["log"]
+
+
 def test_standard_run_action_fails_cleanly_when_vehicle_sim_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

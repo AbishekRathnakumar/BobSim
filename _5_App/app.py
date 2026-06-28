@@ -4005,6 +4005,14 @@ def _modelica_build_dir_ready(target: BuildTargetSpec, build_dir: Path | None = 
     return not _modelica_build_missing_files(target, directory)
 
 
+def _ensure_modelica_build_directory(target: BuildTargetSpec, job_id: str | None = None) -> Path:
+    build_dir = _safe_repo_path(target.build_dir)
+    build_dir.mkdir(parents=True, exist_ok=True)
+    if job_id:
+        JOBS.append_log(job_id, f"Ensured {target.label} build directory: {target.build_dir}\n")
+    return build_dir
+
+
 def _modelica_build_metadata_path(build_dir: Path) -> Path:
     return build_dir / BUILD_METADATA_FILENAME
 
@@ -4167,6 +4175,7 @@ def _modelica_existing_build_matches(
 
 def _run_modelica_build_action(action: ActionSpec, target: BuildTargetSpec, job_id: str) -> int:
     JOBS.append_log(job_id, f"\n# {target.label} build cache\n")
+    _ensure_modelica_build_directory(target, job_id)
     try:
         stack = modelica_stack_status_payload(_safe_repo_path("vehicle.yml"), ROOT)
         signature = _modelica_build_signature_payload(target, stack)
