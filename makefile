@@ -27,7 +27,7 @@ DEPLOY_REQUIREMENTS := _0_Utils/deploy/requirements.txt
 DEPLOY_ASSET_DIR := _0_Utils/deploy/assets
 DEPLOY_BUILD_DIR := _0_Utils/deploy/build
 DEPLOY_DIST_DIR := _0_Utils/deploy/dist
-DEPLOY_OUTPUT_DIR := $(DEPLOY_DIST_DIR)/BobDyn/$(DEPLOY_MODE)
+DEPLOY_OUTPUT_DIR := $(DEPLOY_DIST_DIR)/BobSim/$(DEPLOY_MODE)
 DEPLOY_INSTALL_DEPS_ARG := $(if $(filter 1 true yes,$(DEPLOY_INSTALL_DEPS)),--install-deps,)
 DEPLOY_SKIP_CONFLICT_CHECK_ARG := $(if $(filter 1 true yes,$(DEPLOY_SKIP_CONFLICT_CHECK)),--skip-conflict-check,)
 DEPLOY_VERSION_ARG := $(if $(DEPLOY_VERSION),--version $(DEPLOY_VERSION),)
@@ -78,9 +78,9 @@ help:
 		'  docker-build              Build the Docker development image' \
 		'  docker-rebuild            Rebuild the Docker image from scratch' \
 		'  app                       Open the BobSim browser app' \
-		'  deploy                    Build the BobDyn desktop executable/app bundle' \
+		'  deploy                    Build the BobSim desktop executable/app bundle' \
 		'  deploy-deps               Install deploy packaging dependencies' \
-		'  deploy-assets             Generate BobDyn icon assets' \
+		'  deploy-assets             Generate BobSim icon assets' \
 		'  deploy-package            Package the current deploy artifact for release' \
 		'  deploy-release            Clean, build, and package a release artifact' \
 		'  deploy-clean              Remove deploy build outputs' \
@@ -91,7 +91,7 @@ help:
 		'    DEPLOY_SKIP_CONFLICT_CHECK=1|0       Default: 0' \
 		'    DEPLOY_VERSION=<version>             Optional release package version' \
 		'    DEPLOY_UPLOAD_RELEASE=1|0            Upload package with GitHub CLI' \
-		'    output: _0_Utils/deploy/dist/BobDyn/$(DEPLOY_MODE)' \
+		'    output: _0_Utils/deploy/dist/BobSim/$(DEPLOY_MODE)' \
 		'' \
 		'  shell                     Open the main BobSim shell' \
 		'  shell-standard            Open a StandardSim shell' \

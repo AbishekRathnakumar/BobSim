@@ -45,7 +45,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r _0_Utils/deploy/requirements.txt
 
-      - name: Build and package BobDyn
+      - name: Build and package BobSim
         shell: bash
         run: |
           version="${{ inputs.version }}"
@@ -61,7 +61,7 @@ jobs:
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BobDyn-${{ matrix.name }}-${{ runner.arch }}
+          name: BobSim-${{ matrix.name }}-${{ runner.arch }}
           path: |
             _0_Utils/deploy/dist/releases/*.zip
             _0_Utils/deploy/dist/releases/*.tar.gz
@@ -97,6 +97,6 @@ jobs:
             version="${GITHUB_REF_NAME#v}"
             gh release create "$GITHUB_REF_NAME" "${files[@]}" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "BobDyn $version" \
-              --notes "BobDyn desktop release $version."
+              --title "BobSim $version" \
+              --notes "BobSim desktop release $version."
           fi

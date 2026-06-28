@@ -13,7 +13,7 @@ import webbrowser
 from _5_App import app as bobsim_app
 
 
-APP_TITLE = "BobDyn"
+APP_TITLE = "BobSim"
 HOST = "127.0.0.1"
 
 
@@ -51,7 +51,7 @@ def _preferred_webview_gui() -> Literal["qt"] | None:
 
 
 def _open_browser_and_wait(url: str, server_thread: threading.Thread) -> None:
-    print(f"Opening BobDyn in your browser: {url}", flush=True)
+    print(f"Opening BobSim in your browser: {url}", flush=True)
     webbrowser.open(url)
     try:
         while server_thread.is_alive():
@@ -76,7 +76,7 @@ def main() -> None:
     try:
         import webview
     except Exception as exc:
-        print(f"Embedded BobDyn window unavailable: {exc}", flush=True)
+        print(f"Embedded BobSim window unavailable: {exc}", flush=True)
         _open_browser_and_wait(url, server_thread)
         return
 
@@ -88,7 +88,7 @@ def main() -> None:
         else:
             webview.start()
     except Exception as exc:
-        print(f"Embedded BobDyn window failed to start: {exc}", flush=True)
+        print(f"Embedded BobSim window failed to start: {exc}", flush=True)
         _open_browser_and_wait(url, server_thread)
 
 

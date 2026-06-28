@@ -18,6 +18,8 @@ def test_app_status_exposes_bobsim_workflows_and_boblib_state() -> None:
     assert repo["boblib_package"]["path"] == "_0_Utils/external/BobLib/BobLib/package.mo"
     assert repo["vehicle_exe"]["path"].startswith("_3_StandardSim/BuildBobLib/VehicleSim/")
     assert repo["four_post_exe"]["path"].startswith("_3_StandardSim/BuildBobLib/FourPostSim/")
+    assert payload["runtime"]["home_env"] == "BOBSIM_HOME"
+    assert payload["runtime"]["legacy_home_env"] == "BOBDYN_HOME"
 
     workflow_ids = {workflow["id"] for workflow in payload["workflows"]}
     config_ids = {config["id"] for config in payload["configs"]}
@@ -86,6 +88,11 @@ def test_deploy_does_not_bundle_generated_modelica_binaries() -> None:
     assert "_3_StandardSim/build_four_post_sim.mos" in data_paths
     assert "_3_StandardSim/BuildBobLib" not in data_paths
     assert "_5_App/build_archive" not in data_paths
+
+
+def test_deploy_artifacts_are_named_bobsim() -> None:
+    assert deploy.APP_NAME == "BobSim"
+    assert deploy.DIST_ROOT.name == "BobSim"
 
 
 def test_app_can_read_repo_configs() -> None:

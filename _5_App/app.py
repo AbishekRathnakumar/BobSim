@@ -35,13 +35,16 @@ from _5_App.modelica_generator import (
 )
 
 
-APP_NAME = "BobDyn"
+PROJECT_NAME = "BobDyn"
+APP_NAME = "BobSim"
+PRIMARY_HOME_ENV = "BOBSIM_HOME"
+LEGACY_HOME_ENV = "BOBDYN_HOME"
 PACKAGE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])).resolve()
 FROZEN_APP = bool(getattr(sys, "frozen", False))
 
 
 def _default_runtime_root() -> Path:
-    override = os.environ.get("BOBDYN_HOME")
+    override = os.environ.get(PRIMARY_HOME_ENV) or os.environ.get(LEGACY_HOME_ENV)
     if override:
         return Path(override).expanduser().resolve()
 
@@ -52,7 +55,7 @@ def _default_runtime_root() -> Path:
         base = Path.home() / "Library" / "Application Support"
     else:
         base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return (base / APP_NAME / "BobSim").resolve()
+    return (base / PROJECT_NAME / APP_NAME).resolve()
 
 
 def _runtime_copy_ignore(_: str, names: list[str]) -> set[str]:
@@ -2649,7 +2652,8 @@ def status_payload() -> dict[str, Any]:
             "root": str(ROOT),
             "package_root": str(PACKAGE_ROOT),
             "frozen": FROZEN_APP,
-            "home_env": "BOBDYN_HOME",
+            "home_env": PRIMARY_HOME_ENV,
+            "legacy_home_env": LEGACY_HOME_ENV,
         },
         "external_toolchain": external_toolchain_payload(),
         "modelica": modelica,

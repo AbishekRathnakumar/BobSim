@@ -17,7 +17,7 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
-APP_NAME = "BobDyn"
+APP_NAME = "BobSim"
 DEPLOY_ROOT = ROOT / "_0_Utils" / "deploy"
 DIST_ROOT = DEPLOY_ROOT / "dist" / APP_NAME
 WORK_ROOT = DEPLOY_ROOT / "build" / "pyinstaller"
@@ -160,9 +160,9 @@ def generate_icon_assets() -> dict[str, str]:
         top = (image.height - size) // 2
         image = image.crop((left, top, left + size, top + size))
 
-    png_path = ASSET_ROOT / "bobdyn.png"
-    ico_path = ASSET_ROOT / "bobdyn.ico"
-    icns_path = ASSET_ROOT / "bobdyn.icns"
+    png_path = ASSET_ROOT / "bobsim.png"
+    ico_path = ASSET_ROOT / "bobsim.ico"
+    icns_path = ASSET_ROOT / "bobsim.icns"
     sizes = [(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 
     image.save(png_path)
@@ -377,9 +377,9 @@ def _data_destination(rel_path: str, source: Path) -> str:
 
 def _icon_arg() -> Path:
     system = platform.system()
-    if system == "Darwin" and (ASSET_ROOT / "bobdyn.icns").is_file():
-        return ASSET_ROOT / "bobdyn.icns"
-    return ASSET_ROOT / "bobdyn.ico"
+    if system == "Darwin" and (ASSET_ROOT / "bobsim.icns").is_file():
+        return ASSET_ROOT / "bobsim.icns"
+    return ASSET_ROOT / "bobsim.ico"
 
 
 def _artifact_path(output_root: Path, mode: str) -> Path:
@@ -457,7 +457,8 @@ def build_pyinstaller(mode: str, install_deps: bool, skip_conflict_check: bool) 
         "app": APP_NAME,
         "mode": mode,
         "artifact": str(artifact.relative_to(ROOT)),
-        "runtime_home_env": "BOBDYN_HOME",
+        "runtime_home_env": "BOBSIM_HOME",
+        "legacy_runtime_home_env": "BOBDYN_HOME",
         "assets": generate_icon_assets(),
     }
     manifest_path = output_root / "manifest.json"
@@ -527,7 +528,7 @@ def _write_release_notes(release_dir: Path, version: str, artifact: Path) -> Pat
     notes.write_text(
         "\n".join(
             [
-                f"# BobDyn {version}",
+                f"# BobSim {version}",
                 "",
                 f"Platform: {_platform_slug()}",
                 f"Source commit: {commit}",
@@ -535,14 +536,15 @@ def _write_release_notes(release_dir: Path, version: str, artifact: Path) -> Pat
                 "",
                 "## Highlights",
                 "",
-                "- One-file BobDyn desktop wrapper with the Python backend and frontend bundled.",
-                "- BobDyn logo assets generated from the BobLib resource image.",
+                "- One-file BobSim desktop wrapper with the Python backend and frontend bundled.",
+                "- BobSim icon assets generated from the BobDyn project resource image.",
                 "- Local simulation executables, generated configs, reports, workspaces, and caches are not bundled.",
                 "",
                 "## Run",
                 "",
-                "Extract this archive, then run the BobDyn executable or app bundle.",
-                "Set `BOBDYN_HOME` to choose where runtime-generated data is stored.",
+                "Extract this archive, then run the BobSim executable or app bundle.",
+                "Set `BOBSIM_HOME` to choose where runtime-generated data is stored.",
+                "`BOBDYN_HOME` is also honored for compatibility with older local installs.",
                 "",
                 f"Packaged artifact: `{artifact.name}`",
                 "",
@@ -675,7 +677,7 @@ def build_release(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build BobDyn desktop deploy artifacts.")
+    parser = argparse.ArgumentParser(description="Build BobSim desktop deploy artifacts.")
     parser.add_argument("--mode", choices=("onefile", "onedir"), default="onefile")
     parser.add_argument("--install-deps", action="store_true", help="Install missing deploy dependencies with pip.")
     parser.add_argument("--assets-only", action="store_true", help="Only generate deploy icon assets.")
