@@ -152,6 +152,46 @@ def test_openmodelica_auto_detection_verifies_available_toolchain(
     assert payload["omc_version"] == "OpenModelica v1.26.0"
 
 
+def test_openmodelica_auto_detection_uses_user_package_library(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_openmodelica_settings(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home = tmp_path / "OpenModelica"
+    omc = home / "bin" / ("omc.exe" if app.platform.system() == "Windows" else "omc")
+    user_library = tmp_path / ".openmodelica" / "libraries"
+    omc.parent.mkdir(parents=True)
+    omc.write_text("#!/bin/sh\n", encoding="utf-8")
+    omc.chmod(0o755)
+    for package_name in app.OPENMODELICA_REQUIRED_LIBRARIES:
+        package_dir = user_library / f"{package_name} 1.0.0" / package_name
+        package_dir.mkdir(parents=True, exist_ok=True)
+        (package_dir / "package.mo").write_text(f"package {package_name}\nend {package_name};\n", encoding="utf-8")
+    monkeypatch.setattr(app.shutil, "which", lambda name: str(omc) if name == "omc" else None)
+    monkeypatch.setattr(app, "_common_omc_candidates", lambda _home=None: [omc])
+    monkeypatch.setattr(app.subprocess, "run", fake_omc_version_run)
+
+    payload = app.external_toolchain_payload()
+
+    assert payload["available"] is True
+    assert payload["openmodelica_library"] == str(user_library)
+    assert payload["openmodelica_library_source"] == "default"
+
+
+def test_openmodelica_libraries_include_windows_roaming_user_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    roaming = tmp_path / "Roaming"
+    monkeypatch.setattr(app.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("APPDATA", str(roaming))
+
+    candidates = app._common_openmodelica_libraries()
+
+    assert roaming / ".openmodelica" / "libraries" in candidates
+
+
 def test_openmodelica_settings_override_omc_and_library_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -191,6 +231,26 @@ def test_openmodelica_settings_override_omc_and_library_paths(
     assert env["OPENMODELICAHOME"] == str(home)
     assert env["OPENMODELICALIBRARY"] == str(library)
     assert str(library) in env["MODELICAPATH"].split(app.os.pathsep)
+
+
+def test_openmodelica_selection_accepts_omc_bin_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_openmodelica_settings(monkeypatch)
+    _home, omc, library = fake_openmodelica_install(tmp_path, monkeypatch)
+
+    settings = app._openmodelica_settings_from_payload(
+        {
+            "omc_path": str(omc.parent),
+            "library_path": str(library),
+        }
+    )
+    verified = app._verify_openmodelica_selection(settings)
+
+    assert settings["omc_path"] == str(omc)
+    assert verified["omc_path"] == str(omc)
+    assert verified["omc_version"] == "OpenModelica v1.26.0"
 
 
 def test_deploy_does_not_bundle_generated_modelica_binaries() -> None:
@@ -380,6 +440,50 @@ def test_app_can_patch_powertrain_defaults_into_vehicle(tmp_path: Path, monkeypa
     assert saved["powertrain"]["pMotor"]["P_mech_peak"] == pytest.approx(95_000.0)
     assert saved["powertrain"]["pVCU"]["regenTorqueLimit"] == pytest.approx(180.0)
     assert payload["data"]["powertrain"]["pMotor"]["P_mech_peak"] == pytest.approx(95_000.0)
+
+
+def test_app_can_switch_direct_vehicle_to_bellcrank_actuation_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = app.ROOT
+    active = tmp_path / "vehicle.yml"
+    active.write_text(
+        (source_root / "_0_Utils/vehicle_templates/DWDirect_DWDirectRecord.yml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    shutil.copytree(source_root / "_0_Utils/vehicle_templates", tmp_path / "_0_Utils/vehicle_templates")
+    monkeypatch.setattr(app, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        app,
+        "BASE_CONFIG_SPECS",
+        {"vehicle": app.ConfigSpec(id="vehicle", group="setup", label="Active Vehicle", path="vehicle.yml")},
+    )
+
+    initial = app.config_payload("vehicle")
+    initial_paths = {tuple(field["path"]) for field in initial["fields"]}
+    assert ("front", "actuation", "bellcrank", "pivot_m") in initial_paths
+    assert ("front", "actuation", "stabar", "arm_end_m") in initial_paths
+
+    payload = app.patch_config(
+        "vehicle",
+        {
+            json.dumps(["architecture", "front"]): "bellcrank_stabar",
+            json.dumps(["architecture", "rear"]): "direct",
+        },
+    )
+
+    saved = yaml.safe_load(active.read_text(encoding="utf-8"))
+    front_actuation = saved["front"]["actuation"]
+    rear_actuation = saved["rear"]["actuation"]
+    assert saved["architecture"] == {"front": "bellcrank_stabar", "rear": "direct"}
+    assert front_actuation["bellcrank"]["pickups_m"]["stabar"]
+    assert front_actuation["stabar"]["arm_end_m"]
+    assert front_actuation["bellcrank"]["order"] == ["stabar", "rod", "shock"]
+    assert "bellcrank" not in rear_actuation
+    assert "stabar" not in rear_actuation
+    fields_by_path = {tuple(field["path"]): field for field in payload["fields"]}
+    assert fields_by_path[("front", "actuation", "bellcrank", "order")]["choices"] == ["rod", "shock", "stabar"]
 
 
 def test_app_can_generate_modelica_payload_from_active_vehicle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

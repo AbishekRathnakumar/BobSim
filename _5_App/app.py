@@ -447,7 +447,10 @@ def external_toolchain_enabled() -> bool:
 def _clean_path_string(value: Any) -> str:
     if value is None:
         return ""
-    return os.path.expandvars(os.path.expanduser(str(value).strip()))
+    text = str(value).strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        text = text[1:-1].strip()
+    return os.path.expandvars(os.path.expanduser(text))
 
 
 def _path_list_value(value: str) -> list[str]:
@@ -532,6 +535,16 @@ def _path_info(path: str | Path | None, source: str, *, error: str = "") -> dict
     return {"path": str(candidate), "source": source, "exists": exists, "error": error}
 
 
+def _user_path(path: str | Path) -> Path:
+    text = _clean_path_string(path)
+    if platform.system() == "Windows":
+        text = text.replace("\\", "/")
+        match = re.match(r"^/([A-Za-z])/(.+)$", text)
+        if match:
+            text = f"{match.group(1).upper()}:/{match.group(2)}"
+    return Path(text)
+
+
 def _program_files_dirs() -> list[Path]:
     roots = []
     for key in ("ProgramFiles", "ProgramFiles(x86)"):
@@ -576,10 +589,22 @@ def _common_omc_candidates(home: str | None = None) -> list[Path]:
     return _dedupe_paths(candidates)
 
 
+def _openmodelica_user_library_dirs() -> list[Path]:
+    if platform.system() == "Windows":
+        candidates: list[Path] = []
+        appdata = _clean_path_string(os.environ.get("APPDATA"))
+        if appdata:
+            candidates.append(_user_path(appdata) / ".openmodelica" / "libraries")
+        candidates.append(Path.home() / "AppData" / "Roaming" / ".openmodelica" / "libraries")
+        return _dedupe_paths(candidates)
+    return [Path.home() / ".openmodelica" / "libraries"]
+
+
 def _common_openmodelica_libraries(home: str | None = None) -> list[Path]:
     candidates: list[Path] = []
     if home:
-        candidates.append(Path(home) / "lib" / "omlibrary")
+        candidates.append(_user_path(home) / "lib" / "omlibrary")
+    candidates.extend(_openmodelica_user_library_dirs())
     for candidate_home in _common_openmodelica_homes():
         candidates.append(candidate_home / "lib" / "omlibrary")
     if platform.system() != "Windows":
@@ -598,18 +623,37 @@ def _is_omc_file(path: Path) -> bool:
         return False
     if platform.system() == "Windows":
         return path.name.lower() == "omc.exe"
-    return os.access(path, os.X_OK)
+    return os.access(path, os.X_OK) or path.name == "omc"
+
+
+def _omc_path_candidates(path: str | Path) -> list[Path]:
+    base = _user_path(path)
+    exe_name = _openmodelica_executable_name()
+    candidates = [base]
+    if base.is_dir():
+        if base.name.lower() == "bin":
+            candidates.append(base / exe_name)
+        else:
+            candidates.append(base / "bin" / exe_name)
+    elif platform.system() == "Windows" and base.name.lower() == "omc":
+        candidates.append(base.with_name("omc.exe"))
+    return _dedupe_paths(candidates)
+
+
+def _normalize_omc_path(path: str | Path) -> Path:
+    candidates = _omc_path_candidates(path)
+    return next((candidate for candidate in candidates if _is_omc_file(candidate)), candidates[0])
 
 
 def _resolve_omc_path(settings: dict[str, str], home: str | None = None) -> dict[str, Any]:
     configured, source = _configured_path(settings, "omc_path", OPENMODELICA_OMC_ENV_KEYS)
     if configured:
-        path = Path(configured)
+        path = _normalize_omc_path(configured)
         error = "" if _is_omc_file(path) else f"Configured omc executable was not found or is not executable: {path}"
         return _path_info(path, source or "saved", error=error)
 
     if home:
-        home_candidate = Path(home) / "bin" / _openmodelica_executable_name()
+        home_candidate = _user_path(home) / "bin" / _openmodelica_executable_name()
         if _is_omc_file(home_candidate):
             return _path_info(home_candidate, "openmodelica-home")
 
@@ -631,7 +675,7 @@ def _resolve_omc_path(settings: dict[str, str], home: str | None = None) -> dict
 def _infer_openmodelica_home(omc_path: str | None) -> str | None:
     if not omc_path:
         return None
-    path = Path(omc_path)
+    path = _user_path(omc_path)
     if path.parent.name.lower() == "bin":
         return str(path.parent.parent)
     return None
@@ -640,7 +684,7 @@ def _infer_openmodelica_home(omc_path: str | None) -> str | None:
 def _resolve_openmodelica_home(settings: dict[str, str], omc_path: str | None) -> dict[str, Any]:
     configured, source = _configured_path(settings, "openmodelica_home", OPENMODELICA_HOME_ENV_KEYS)
     if configured:
-        path = Path(configured)
+        path = _user_path(configured)
         error = "" if path.is_dir() else f"Configured OpenModelica home directory was not found: {path}"
         return _path_info(path, source or "saved", error=error)
 
@@ -669,17 +713,20 @@ def _configured_library_candidates(settings: dict[str, str]) -> list[tuple[str, 
 def _resolve_openmodelica_library(settings: dict[str, str], home: str | None) -> dict[str, Any]:
     configured_candidates = _configured_library_candidates(settings)
     for configured, source in configured_candidates:
-        path = Path(configured)
+        path = _user_path(configured)
         if path.is_dir():
             return _path_info(path, source)
     if configured_candidates:
         configured, source = configured_candidates[0]
-        path = Path(configured)
+        path = _user_path(configured)
         return _path_info(path, source, error=f"Configured OpenModelica library directory was not found: {path}")
 
-    for candidate in _common_openmodelica_libraries(home):
-        if candidate.is_dir():
+    existing_candidates = [candidate for candidate in _common_openmodelica_libraries(home) if candidate.is_dir()]
+    for candidate in existing_candidates:
+        if not _missing_openmodelica_libraries(candidate):
             return _path_info(candidate, "default")
+    if existing_candidates:
+        return _path_info(existing_candidates[0], "default")
     return {"path": None, "source": "omc-default", "exists": False, "error": ""}
 
 
@@ -698,8 +745,11 @@ def _library_contains_package(library_path: Path, package_name: str) -> bool:
     if direct.is_file():
         return True
     for child in library_path.glob(f"{package_name}*"):
-        if child.is_dir() and (child / "package.mo").is_file():
-            return True
+        if child.is_dir():
+            if (child / "package.mo").is_file():
+                return True
+            if (child / package_name / "package.mo").is_file():
+                return True
     return False
 
 
@@ -727,7 +777,17 @@ def _apply_openmodelica_env_paths(
         if platform.system() == "Darwin":
             _prepend_env_path(env, "DYLD_LIBRARY_PATH", runtime_libs)
         elif platform.system() == "Windows":
-            _prepend_env_path(env, "PATH", [str(home_path / "bin"), str(home_path / "lib")])
+            _prepend_env_path(
+                env,
+                "PATH",
+                [
+                    str(home_path / "bin"),
+                    str(home_path / "lib"),
+                    str(home_path / "tools" / "msys" / "mingw64" / "bin"),
+                    str(home_path / "tools" / "msys" / "ucrt64" / "bin"),
+                    str(home_path / "tools" / "msys" / "usr" / "bin"),
+                ],
+            )
         else:
             _prepend_env_path(env, "LD_LIBRARY_PATH", runtime_libs)
     if library:
@@ -739,6 +799,8 @@ def _verify_openmodelica_selection(settings: dict[str, str]) -> dict[str, str]:
     omc_path = settings.get("omc_path", "")
     library_path = settings.get("library_path", "")
     home_path = settings.get("openmodelica_home", "")
+    if omc_path:
+        omc_path = str(_normalize_omc_path(omc_path))
 
     if not omc_path:
         raise ValueError("Select an omc executable before enabling Simulation.")
@@ -781,6 +843,7 @@ def _verify_openmodelica_selection(settings: dict[str, str]) -> dict[str, str]:
         raise ValueError(f"omc verification failed: {detail}")
 
     verified = dict(settings)
+    verified["omc_path"] = omc_path
     verified["omc_version"] = output.splitlines()[0].strip() if output else "OpenModelica"
     verified["verified_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     return verified
@@ -821,7 +884,7 @@ def _openmodelica_settings_from_payload(payload: dict[str, Any]) -> dict[str, st
 
     home_hint = requested.get("openmodelica_home")
     omc = _resolve_omc_path(requested, home_hint)
-    if not requested.get("omc_path") and omc.get("path"):
+    if omc.get("path"):
         requested["omc_path"] = str(omc["path"])
 
     home = _resolve_openmodelica_home(requested, requested.get("omc_path"))
@@ -838,10 +901,10 @@ def _openmodelica_settings_from_payload(payload: dict[str, Any]) -> dict[str, st
 def openmodelica_toolchain_payload() -> dict[str, Any]:
     saved_settings = _read_openmodelica_settings()
     detected_settings = _openmodelica_settings_from_payload(saved_settings)
-    home_configured, _home_source = _configured_path(detected_settings, "openmodelica_home", OPENMODELICA_HOME_ENV_KEYS)
-    omc = _resolve_omc_path(detected_settings, home_configured)
-    home = _resolve_openmodelica_home(detected_settings, omc.get("path"))
-    library = _resolve_openmodelica_library(detected_settings, home.get("path"))
+    home_configured, _home_source = _configured_path(saved_settings, "openmodelica_home", OPENMODELICA_HOME_ENV_KEYS)
+    omc = _resolve_omc_path(saved_settings, home_configured)
+    home = _resolve_openmodelica_home(saved_settings, omc.get("path"))
+    library = _resolve_openmodelica_library(saved_settings, home.get("path"))
     errors = [item["error"] for item in (omc, home, library) if item.get("error")]
     selected = _openmodelica_selection_complete(detected_settings)
     saved = _openmodelica_selection_complete(saved_settings)
@@ -2075,6 +2138,87 @@ def _deep_merge_missing(target: dict[str, Any], defaults: dict[str, Any]) -> Non
             target.setdefault(key, copy.deepcopy(value))
 
 
+def _vehicle_template_data() -> list[dict[str, Any]]:
+    template_root = _safe_repo_path("_0_Utils/vehicle_templates")
+    if not template_root.is_dir():
+        return []
+    templates: list[dict[str, Any]] = []
+    for path in sorted(template_root.glob("*.yml")):
+        data = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace")) or {}
+        if isinstance(data, dict):
+            templates.append(data)
+    return templates
+
+
+def _vehicle_template_for_architecture(front: str, rear: str) -> dict[str, Any] | None:
+    for data in _vehicle_template_data():
+        architecture = data.get("architecture", {})
+        if not isinstance(architecture, dict):
+            continue
+        if architecture.get("front") == front and architecture.get("rear") == rear:
+            return data
+    return None
+
+
+def _vehicle_template_for_axle_architecture(axle: str, architecture_id: str) -> dict[str, Any] | None:
+    for data in _vehicle_template_data():
+        architecture = data.get("architecture", {})
+        if isinstance(architecture, dict) and architecture.get(axle) == architecture_id:
+            return data
+    return None
+
+
+def _merge_axle_defaults(data: dict[str, Any], axle: str, defaults: dict[str, Any] | None) -> None:
+    if not isinstance(defaults, dict):
+        return
+    current = data.get(axle)
+    if not isinstance(current, dict):
+        data[axle] = copy.deepcopy(defaults)
+        return
+    _deep_merge_missing(current, defaults)
+
+
+def _normalized_bellcrank_order(values: Any, choices: tuple[str, ...]) -> list[str]:
+    order: list[str] = []
+    raw_values = values if isinstance(values, list) else []
+    for value in raw_values:
+        text = str(value)
+        if text in choices and text not in order:
+            order.append(text)
+    for choice in choices:
+        if choice not in order:
+            order.append(choice)
+    return order[: len(choices)]
+
+
+def _normalize_vehicle_actuation_for_architecture(data: dict[str, Any], *, prune_inactive: bool) -> None:
+    architecture = data.get("architecture", {})
+    if not isinstance(architecture, dict):
+        return
+    for axle in ("front", "rear"):
+        axle_data = data.get(axle)
+        if not isinstance(axle_data, dict):
+            continue
+        actuation = axle_data.get("actuation")
+        if not isinstance(actuation, dict):
+            continue
+        axle_architecture = str(architecture.get(axle) or "direct")
+        has_bellcrank = "bellcrank" in axle_architecture
+        has_stabar = "stabar" in axle_architecture
+        if has_bellcrank:
+            bellcrank = actuation.get("bellcrank")
+            if isinstance(bellcrank, dict):
+                choices = STABAR_BELLCRANK_ORDER_CHOICES if has_stabar else BELLCRANK_ORDER_CHOICES
+                bellcrank["order"] = _normalized_bellcrank_order(bellcrank.get("order"), choices)
+                pickups = bellcrank.get("pickups_m")
+                if prune_inactive and not has_stabar and isinstance(pickups, dict):
+                    pickups.pop("stabar", None)
+        elif prune_inactive:
+            actuation.pop("bellcrank", None)
+        if prune_inactive and not has_stabar:
+            actuation.pop("stabar", None)
+
+
 def _vehicle_with_powertrain_defaults(data: Any) -> Any:
     if not isinstance(data, dict):
         return data
@@ -2086,6 +2230,41 @@ def _vehicle_with_powertrain_defaults(data: Any) -> Any:
     else:
         _deep_merge_missing(existing, defaults)
         existing["implementation"] = str(existing.get("implementation") or powertrain_id)
+    return data
+
+
+def _vehicle_with_architecture_defaults(data: Any, *, prune_inactive: bool = False) -> Any:
+    if not isinstance(data, dict):
+        return data
+    architecture = data.get("architecture")
+    if not isinstance(architecture, dict):
+        architecture = {}
+        data["architecture"] = architecture
+    front = str(architecture.get("front") or "direct")
+    rear = str(architecture.get("rear") or "direct")
+    architecture["front"] = front
+    architecture["rear"] = rear
+
+    combined_defaults = _vehicle_template_for_architecture(front, rear)
+    if combined_defaults:
+        for axle in ("front", "rear"):
+            _merge_axle_defaults(data, axle, combined_defaults.get(axle))
+
+    inactive_default_order = ("direct", "bellcrank_stabar", "bellcrank")
+    for axle in ("front", "rear"):
+        for architecture_id in inactive_default_order:
+            template = _vehicle_template_for_axle_architecture(axle, architecture_id)
+            axle_defaults = template.get(axle) if isinstance(template, dict) else None
+            if isinstance(axle_defaults, dict):
+                actuation_defaults = axle_defaults.get("actuation")
+                if isinstance(actuation_defaults, dict):
+                    current_axle = data.setdefault(axle, {})
+                    if isinstance(current_axle, dict):
+                        current_actuation = current_axle.setdefault("actuation", {})
+                        if isinstance(current_actuation, dict):
+                            _deep_merge_missing(current_actuation, actuation_defaults)
+
+    _normalize_vehicle_actuation_for_architecture(data, prune_inactive=prune_inactive)
     return data
 
 
@@ -2195,6 +2374,7 @@ def config_payload(config_id: str) -> dict[str, Any]:
     path, raw, data = _load_yaml_config(spec)
     if spec.id == "vehicle":
         data = _vehicle_with_powertrain_defaults(data)
+        data = _vehicle_with_architecture_defaults(data)
     return {
         **config_summary(spec),
         "modified": path.stat().st_mtime,
@@ -2209,6 +2389,7 @@ def patch_config(config_id: str, values: dict[str, Any]) -> dict[str, Any]:
     path, _, data = _load_yaml_config(spec)
     if spec.id == "vehicle":
         data = _vehicle_with_powertrain_defaults(data)
+        data = _vehicle_with_architecture_defaults(data)
     disabled_paths = {
         field.path
         for field in (VEHICLE_FIELDS if spec.id == "vehicle" else spec.fields)
@@ -2219,6 +2400,9 @@ def patch_config(config_id: str, values: dict[str, Any]) -> dict[str, Any]:
         if decoded_path in disabled_paths:
             continue
         _set_nested(data, decoded_path, value)
+    if spec.id == "vehicle":
+        data = _vehicle_with_powertrain_defaults(data)
+        data = _vehicle_with_architecture_defaults(data, prune_inactive=True)
     _write_yaml_config(path, data)
     return config_payload(config_id)
 
