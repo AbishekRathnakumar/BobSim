@@ -104,6 +104,7 @@ const state = {
   activeParamGroup: null,
   vehicleStartOpen: true,
   dirtyVehicle: false,
+  saveStatusMessage: "",
   vehicleDefinitionState: "pending",
   vehiclePreviewView: "iso",
   vehiclePreviewYaw: DEFAULT_VEHICLE_YAW,
@@ -731,6 +732,14 @@ function activeVehicleName() {
   return state.vehiclePayload?.data?.vehicle?.name || "Active vehicle";
 }
 
+function setSaveStatus(message) {
+  state.saveStatusMessage = message || "";
+  const saveStatus = document.getElementById("save-status");
+  if (saveStatus) {
+    saveStatus.textContent = state.saveStatusMessage || (state.dirtyVehicle ? "Unsaved" : "Saved");
+  }
+}
+
 function activeArchitecture() {
   const architecture = state.vehiclePayload?.data?.architecture || {};
   return `${architecture.front || "front"} / ${architecture.rear || "rear"}`;
@@ -1020,7 +1029,7 @@ function renderRailActions() {
     primary.textContent = "Save Vehicle";
     primary.disabled = !canSaveVehicle || state.modelicaWriting;
     primary.title = state.dirtyVehicle
-      ? "Save active vehicle edits"
+      ? "Save active vehicle edits and update the saved config"
       : needsVehicleConfig
       ? "Save this vehicle config"
       : "Vehicle has no unsaved edits";
@@ -1108,7 +1117,7 @@ function renderVehicleEditor() {
   if (!state.vehiclePayload) return;
   document.getElementById("config-path").textContent = state.vehiclePayload.path;
   document.getElementById("config-text").value = state.vehiclePayload.raw;
-  document.getElementById("save-status").textContent = state.dirtyVehicle ? "Unsaved" : "Saved";
+  setSaveStatus(state.saveStatusMessage);
 
   const form = document.getElementById("config-form");
   const areas = buildParameterAreas(state.vehiclePayload.fields || []);
@@ -1311,7 +1320,8 @@ function updateDirtyState() {
   state.dirtyVehicle = Boolean(signature && signature !== state.cleanVehicleSignature);
   if (state.dirtyVehicle) state.vehicleDefinitionState = "invalid";
   else if (state.vehicleDefinitionState === "invalid") state.vehicleDefinitionState = "pending";
-  document.getElementById("save-status").textContent = state.dirtyVehicle ? "Unsaved" : "Saved";
+  state.saveStatusMessage = "";
+  setSaveStatus("");
   renderMode();
   renderRailActions();
   renderModelicaStack();
@@ -2782,42 +2792,61 @@ function collectScalarValue(input, kind, reportInvalid) {
   return input.value;
 }
 
-async function saveVehicleEdits() {
+async function saveVehicleEdits({ successMessage = "Vehicle saved" } = {}) {
   let values;
   try {
     values = collectVehicleValues({ reportInvalid: true });
   } catch (error) {
-    document.getElementById("save-status").textContent = error.message;
+    setSaveStatus(error.message);
     return null;
   }
-  const payload = await api("/api/configs/vehicle", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode: "patch", values }),
-  });
-  state.vehiclePayload = payload;
-  acceptCleanVehiclePayload({ definitionState: "pending" });
-  await refreshStatus();
-  await refreshVehicleDiagnostics(state.vehiclePayload?.data || {});
-  renderSetup();
-  return payload;
+  setSaveStatus("Saving vehicle...");
+  try {
+    const payload = await api("/api/configs/vehicle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "patch", values }),
+    });
+    state.vehiclePayload = payload;
+    acceptCleanVehiclePayload({ definitionState: "pending" });
+    await refreshStatus();
+    state.vehicleLibrary = await api("/api/vehicles");
+    await refreshVehicleDiagnostics(state.vehiclePayload?.data || {});
+    renderSetup();
+    setSaveStatus(successMessage);
+    return payload;
+  } catch (error) {
+    setSaveStatus(error.message || "Could not save vehicle");
+    renderRailActions();
+    return null;
+  }
 }
 
-async function saveVehicleAs() {
-  const payload = await saveVehicleEdits();
+async function saveVehicleAs({ useNameInput = true } = {}) {
+  const payload = await saveVehicleEdits({ successMessage: "Vehicle edits saved" });
   if (!payload) return;
-  const name = document.getElementById("save-vehicle-name").value || activeVehicleName();
-  state.vehicleLibrary = await api("/api/vehicles/save", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  state.selectedVehicleSource = state.vehicleLibrary.saved?.id || "active";
-  await refreshStatus();
-  await refreshSavedResults();
-  await refreshResultSources();
-  await refreshProcessingWorkflows();
-  renderSetup();
+  const nameInput = document.getElementById("save-vehicle-name");
+  const name = useNameInput && nameInput?.value.trim() ? nameInput.value.trim() : activeVehicleName();
+  setSaveStatus(`Saving ${name}...`);
+  try {
+    state.vehicleLibrary = await api("/api/vehicles/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    state.selectedVehicleSource = state.vehicleLibrary.saved?.id || "active";
+    await refreshStatus();
+    await refreshSavedResults();
+    await refreshResultSources();
+    await refreshProcessingWorkflows();
+    renderSetup();
+    setSaveStatus(`Saved ${name}`);
+    return state.vehicleLibrary;
+  } catch (error) {
+    setSaveStatus(error.message || "Could not save vehicle config");
+    renderRailActions();
+    return null;
+  }
 }
 
 async function generateModelicaFromVehicle() {
@@ -2841,15 +2870,13 @@ async function generateModelicaFromVehicle() {
     await refreshSavedResults();
     await refreshResultSources();
     await refreshProcessingWorkflows();
-    const saveStatus = document.getElementById("save-status");
-    if (saveStatus) saveStatus.textContent = `Wrote ${generated.record?.name || "vehicle definition"} to MBD`;
+    setSaveStatus(`Wrote ${generated.record?.name || "vehicle definition"} to MBD`);
     renderTopbar();
     renderModelicaStack();
     state.activeSimTab = "setup";
     setView("standard");
   } catch (error) {
-    const saveStatus = document.getElementById("save-status");
-    if (saveStatus) saveStatus.textContent = error.message;
+    setSaveStatus(error.message);
     renderModelicaStack();
   } finally {
     state.modelicaWriting = false;
@@ -2859,20 +2886,27 @@ async function generateModelicaFromVehicle() {
 }
 
 async function saveRawVehicle() {
-  const payload = await api("/api/configs/vehicle", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode: "raw", text: document.getElementById("config-text").value }),
-  });
-  state.vehiclePayload = payload;
-  acceptCleanVehiclePayload({ definitionState: "pending" });
-  await refreshStatus();
-  state.vehicleLibrary = await api("/api/vehicles");
-  await refreshSavedResults();
-  await refreshResultSources();
-  await refreshProcessingWorkflows();
-  await refreshVehicleDiagnostics(state.vehiclePayload?.data || {});
-  renderSetup();
+  setSaveStatus("Saving raw vehicle...");
+  try {
+    const payload = await api("/api/configs/vehicle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "raw", text: document.getElementById("config-text").value }),
+    });
+    state.vehiclePayload = payload;
+    acceptCleanVehiclePayload({ definitionState: "pending" });
+    await refreshStatus();
+    state.vehicleLibrary = await api("/api/vehicles");
+    await refreshSavedResults();
+    await refreshResultSources();
+    await refreshProcessingWorkflows();
+    await refreshVehicleDiagnostics(state.vehiclePayload?.data || {});
+    renderSetup();
+    setSaveStatus("Saved raw vehicle");
+  } catch (error) {
+    setSaveStatus(error.message || "Could not save raw vehicle");
+    renderRailActions();
+  }
 }
 
 async function loadVehicleSource() {
@@ -12298,7 +12332,7 @@ function wireEvents() {
   document.getElementById("setup-prev-btn")?.addEventListener("click", () => navigateParameterStep(-1));
   document.getElementById("setup-next-btn")?.addEventListener("click", () => navigateParameterStep(1));
   document.getElementById("rail-primary-btn").addEventListener("click", async () => {
-    if (state.view === "setup") await saveVehicleEdits();
+    if (state.view === "setup") await saveVehicleAs({ useNameInput: false });
     else if (state.view === "studies") await saveActiveResults();
     else await configureSimulationWorkflow(selectedWorkflow()?.id);
   });
