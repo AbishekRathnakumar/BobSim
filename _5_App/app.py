@@ -443,10 +443,7 @@ def external_toolchain_payload() -> dict[str, Any]:
     if available:
         reason = "OpenModelica toolchain available."
     elif FROZEN_APP and not enabled:
-        reason = (
-            "Simulation runner is disabled in the desktop build. "
-            f"Set {EXTERNAL_TOOLCHAIN_ENV}=1 to use an external OpenModelica install."
-        )
+        reason = "Simulation runs are not included in this desktop build."
     else:
         reason = "OpenModelica `omc` was not found on PATH."
     return {

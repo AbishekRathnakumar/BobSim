@@ -57,9 +57,10 @@ def test_frozen_desktop_disables_external_toolchain_by_default(monkeypatch: pyte
     workflow = next(workflow for workflow in app.WORKFLOWS if workflow.id == "ramp-steer")
     workflow_json = app.workflow_payload(workflow)
     assert workflow_json["available"] is False
-    assert "disabled in the desktop build" in workflow_json["unavailable_reason"]
+    assert workflow_json["unavailable_reason"] == "Simulation runs are not included in this desktop build."
+    assert app.EXTERNAL_TOOLCHAIN_ENV not in workflow_json["unavailable_reason"]
 
-    with pytest.raises(RuntimeError, match="disabled in the desktop build"):
+    with pytest.raises(RuntimeError, match="not included in this desktop build"):
         app.start_workflow("ramp-steer")
 
 
