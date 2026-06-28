@@ -59,6 +59,10 @@ const state = {
   tirePayload: null,
   tireTemplates: null,
   activeTir: null,
+  activeTirCleanText: "",
+  tireSaving: false,
+  tirePayloadUpdating: false,
+  tireStatusMessage: "",
   kinematicsPayload: null,
   kinematicsStatus: "idle",
   kinematicsRequestId: 0,
@@ -388,7 +392,11 @@ async function api(path, options = {}) {
   return data;
 }
 
-async function refreshTirePayload(vehicle = null) {
+async function refreshTirePayload(vehicle = null, { showBusy = false } = {}) {
+  if (showBusy) {
+    state.tirePayloadUpdating = true;
+    renderTirActionState();
+  }
   try {
     const payload = vehicle
       ? await api("/api/tires/eval", {
@@ -409,18 +417,33 @@ async function refreshTirePayload(vehicle = null) {
       state.tirePayload = { ...state.tirePayload, model: error.message };
     }
     return false;
+  } finally {
+    if (showBusy) {
+      state.tirePayloadUpdating = false;
+      renderTirActionState();
+    }
   }
 }
 
 function queueTirePayloadRefresh() {
   const requestId = state.tirePayloadRequestId + 1;
   state.tirePayloadRequestId = requestId;
+  state.tirePayloadUpdating = true;
+  renderTirActionState();
   window.clearTimeout(state.tirePayloadRefreshTimer);
   state.tirePayloadRefreshTimer = window.setTimeout(async () => {
     const vehicle = currentVehicleFormData();
-    if (!vehicle) return;
+    if (!vehicle) {
+      if (requestId === state.tirePayloadRequestId) {
+        state.tirePayloadUpdating = false;
+        renderTirActionState();
+      }
+      return;
+    }
     await refreshTirePayload(vehicle);
     if (requestId !== state.tirePayloadRequestId) return;
+    state.tirePayloadUpdating = false;
+    renderTirActionState();
     drawVehicleFromForm();
   }, 180);
 }
@@ -1692,13 +1715,14 @@ function tireParameterToolsHtml() {
     <div class="tir-tools compact-tir-tools" data-tir-tools>
       <div class="tir-tools-head">
         <select id="tir-template-picker" class="config-picker"></select>
-        <button id="save-tir-btn" class="ghost-button" type="button">Save .tir</button>
+        <button id="save-tir-btn" class="ghost-button" type="button">Save .tir + Update Plot</button>
       </div>
-      <div class="tir-apply-row">
+      <div class="tir-status-row">
         <span id="tir-editor-meta"></span>
-        <button class="ghost-button" type="button" data-apply-tir="front">Use Front</button>
-        <button class="ghost-button" type="button" data-apply-tir="rear">Use Rear</button>
-        <button class="run-button" type="button" data-apply-tir="both">Use Both</button>
+        <span class="tir-update-state">
+          <span id="tir-update-spinner" class="tir-spinner" hidden aria-hidden="true"></span>
+          <span id="tir-update-status"></span>
+        </span>
       </div>
     </div>
   `;
@@ -2118,13 +2142,14 @@ function tireToolsHtml() {
           <input id="tir-import-input" type="file" accept=".tir">
           <span>Import .tir</span>
         </label>
-        <button id="save-tir-btn" class="ghost-button" type="button">Save .tir</button>
+        <button id="save-tir-btn" class="ghost-button" type="button">Save .tir + Update Plot</button>
       </div>
-      <div class="tir-apply-row">
+      <div class="tir-status-row">
         <span id="tir-editor-meta"></span>
-        <button class="ghost-button" type="button" data-apply-tir="front">Use Front</button>
-        <button class="ghost-button" type="button" data-apply-tir="rear">Use Rear</button>
-        <button class="run-button" type="button" data-apply-tir="both">Use Both</button>
+        <span class="tir-update-state">
+          <span id="tir-update-spinner" class="tir-spinner" hidden aria-hidden="true"></span>
+          <span id="tir-update-status"></span>
+        </span>
       </div>
       <textarea id="tir-editor" class="tir-editor" spellcheck="false"></textarea>
     </div>
@@ -3248,54 +3273,114 @@ function defaultTirTemplateName() {
   return state.tireTemplates?.templates?.[0]?.id || "";
 }
 
+function setActiveTir(payload, { status = "" } = {}) {
+  state.activeTir = payload;
+  state.activeTirCleanText = payload?.text || "";
+  state.tireStatusMessage = status;
+}
+
+function currentTirEditorText() {
+  const editor = document.getElementById("tir-editor");
+  return editor ? editor.value : state.activeTir?.text || "";
+}
+
+function activeTirDirty() {
+  return Boolean(state.activeTir) && currentTirEditorText() !== (state.activeTirCleanText || "");
+}
+
+function renderTirActionState() {
+  const saveButton = document.getElementById("save-tir-btn");
+  const status = document.getElementById("tir-update-status");
+  const spinner = document.getElementById("tir-update-spinner");
+  const dirty = activeTirDirty();
+  const busy = state.tireSaving || state.tirePayloadUpdating;
+
+  if (saveButton) {
+    saveButton.textContent = state.tireSaving
+      ? "Saving..."
+      : state.tirePayloadUpdating
+      ? "Updating plot..."
+      : "Save .tir + Update Plot";
+    saveButton.disabled = !state.activeTir || !dirty || busy;
+    saveButton.title = dirty
+      ? "Save the edited .tir file and update the tire plot"
+      : "Edit a tire parameter before saving";
+  }
+  if (spinner) spinner.hidden = !busy;
+  if (status) {
+    status.textContent = state.tireSaving
+      ? "Saving .tir"
+      : state.tirePayloadUpdating
+      ? "Updating plot"
+      : state.tireStatusMessage
+        || (dirty ? "Unsaved tire edits" : state.activeTir ? "Saved" : "No .tir loaded");
+  }
+}
+
 async function loadTirTemplate(name) {
   const template = name || defaultTirTemplateName();
   if (!template) return;
-  state.activeTir = await api(`/api/tires/template?name=${encodeURIComponent(template)}`);
+  setActiveTir(await api(`/api/tires/template?name=${encodeURIComponent(template)}`));
   renderTirEditorContent();
 }
 
 async function saveActiveTirTemplate() {
+  if (!state.activeTir || !activeTirDirty() || state.tireSaving || state.tirePayloadUpdating) return;
   const name = document.getElementById("tir-template-picker")?.value || state.activeTir?.id || defaultTirTemplateName();
   const text = document.getElementById("tir-editor")?.value ?? state.activeTir?.text ?? "";
-  state.activeTir = await api("/api/tires/template", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, text }),
-  });
-  await refreshTireTemplates();
-  await refreshTirePayload(currentVehicleFormData());
-  renderTirEditorContent();
-  drawVehicleFromForm();
+  state.tireSaving = true;
+  state.tireStatusMessage = "";
+  renderTirActionState();
+  try {
+    setActiveTir(await api("/api/tires/template", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, text }),
+    }));
+    await refreshTireTemplates();
+    await refreshTirePayload(currentVehicleFormData(), { showBusy: true });
+    state.tireStatusMessage = "Saved and updated plot";
+    renderTirEditorContent();
+    drawVehicleFromForm();
+  } catch (error) {
+    state.tireStatusMessage = error.message;
+    renderTirActionState();
+  } finally {
+    state.tireSaving = false;
+    renderTirActionState();
+  }
 }
 
 async function importTirFile(file) {
   if (!file) return;
   const text = await file.text();
-  state.activeTir = await api("/api/tires/import", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: file.name, text }),
-  });
-  await refreshTireTemplates();
-  await refreshTirePayload(currentVehicleFormData());
-  renderTirEditorContent();
-  drawVehicleFromForm();
+  state.tireSaving = true;
+  state.tireStatusMessage = "";
+  renderTirActionState();
+  try {
+    setActiveTir(await api("/api/tires/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: file.name, text }),
+    }), { status: "Imported and updated plot" });
+    await refreshTireTemplates();
+    await refreshTirePayload(currentVehicleFormData(), { showBusy: true });
+    renderTirEditorContent();
+    drawVehicleFromForm();
+  } catch (error) {
+    state.tireStatusMessage = error.message;
+    renderTirActionState();
+  } finally {
+    state.tireSaving = false;
+    renderTirActionState();
+  }
 }
 
-function applyTirTemplate(target) {
-  const name = document.getElementById("tir-template-picker")?.value || state.activeTir?.id;
-  if (!name) return;
-  pushUndoSnapshot(snapshotVehicleState("tire-template"));
-  const sides = target === "both" ? ["front", "rear"] : [target];
-  sides.forEach((side) => {
-    document.querySelectorAll("#config-form [data-config-path]").forEach((input) => {
-      const path = JSON.parse(input.dataset.configPath);
-      if (path.join(".") === `${side}.tire.template`) input.value = name;
-    });
-  });
-  markVehicleDirty();
-  queueTirePayloadRefresh();
+function syncActiveTirText(value) {
+  if (!state.activeTir) return;
+  state.activeTir = { ...state.activeTir, text: value };
+  state.tireStatusMessage = "";
+  renderTirActionState();
 }
 
 function renderTirEditorContent() {
@@ -3315,6 +3400,7 @@ function renderTirEditorContent() {
   meta.textContent = state.activeTir
     ? `${state.activeTir.path} | FNOMIN ${formatNumber(metadata.fznom_n)} N | R0 ${formatNumber(metadata.unloaded_radius_m)} m`
     : "No .tir template loaded";
+  renderTirActionState();
 }
 
 function wireTireTabs() {
@@ -3386,8 +3472,8 @@ function wireTireTools() {
     event.target.value = "";
   });
   document.getElementById("save-tir-btn")?.addEventListener("click", saveActiveTirTemplate);
-  document.querySelectorAll("[data-apply-tir]").forEach((button) => {
-    button.addEventListener("click", () => applyTirTemplate(button.dataset.applyTir));
+  document.getElementById("tir-editor")?.addEventListener("input", (event) => {
+    syncActiveTirText(event.target.value);
   });
 }
 
@@ -3412,6 +3498,8 @@ function updateActiveTirParameter(key, value) {
   state.activeTir = { ...state.activeTir, text: parsed.lines.join("\n") };
   const editor = document.getElementById("tir-editor");
   if (editor) editor.value = state.activeTir.text;
+  state.tireStatusMessage = "";
+  renderTirActionState();
 }
 
 function renderStandard() {

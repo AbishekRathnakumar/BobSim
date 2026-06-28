@@ -177,6 +177,18 @@ def test_frontend_tire_setup_draws_corner_force_envelopes_and_alignment() -> Non
     assert "function tireCombinedForceMapRowsAtFzAndCamber" in app_js
     assert "force_maps_by_gamma_fz" in app_js
     assert "longitudinal_by_gamma" in app_js
+    assert "Save .tir + Update Plot" in app_js
+    assert "function activeTirDirty" in app_js
+    assert "tirePayloadUpdating" in app_js
+    assert "data-apply-tir" not in app_js
+
+
+def test_frontend_tire_tools_show_save_update_spinner() -> None:
+    styles = (app.ROOT / "_5_App/static/styles.css").read_text(encoding="utf-8")
+
+    assert ".tir-status-row" in styles
+    assert ".tir-spinner" in styles
+    assert "@keyframes tir-spin" in styles
 
 
 def test_frontend_powertrain_subsystem_tabs_wrap_before_clipping() -> None:

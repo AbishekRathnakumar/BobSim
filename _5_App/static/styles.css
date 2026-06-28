@@ -2006,18 +2006,18 @@ body.resizing-plot-pane * {
 }
 
 .tir-tools-head,
-.tir-apply-row {
+.tir-status-row {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.tir-apply-row {
+.tir-status-row {
   justify-content: space-between;
 }
 
-.tir-apply-row span {
+.tir-status-row > span:first-child {
   min-width: 0;
   flex: 1;
   color: var(--muted);
@@ -2025,6 +2025,37 @@ body.resizing-plot-pane * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tir-update-state {
+  min-height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 760;
+  white-space: nowrap;
+}
+
+.tir-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid color-mix(in srgb, var(--blue) 20%, var(--line));
+  border-top-color: var(--blue);
+  border-radius: 999px;
+  animation: tir-spin 0.72s linear infinite;
+}
+
+.tir-spinner[hidden] {
+  display: none;
+}
+
+@keyframes tir-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .file-import {
