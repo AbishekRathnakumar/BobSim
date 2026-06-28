@@ -27,7 +27,8 @@ loadModel(VehicleInterfaces, {"2.0.2"});
 // Load BobLib.
 loadFile(boblibDir + "/package.mo");
 
-system("mkdir -p " + buildDir);
+mkdir(root + "/_3_StandardSim/BuildBobLib");
+mkdir(buildDir);
 
 // Go to build directory.
 cd(buildDir);

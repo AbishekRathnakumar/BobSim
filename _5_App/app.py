@@ -70,6 +70,12 @@ def _runtime_copy_ignore(_: str, names: list[str]) -> set[str]:
     return {name for name in names if name in ignored or name.endswith((".pyc", ".pyo"))}
 
 
+APP_OWNED_RUNTIME_FILES = {
+    "_3_StandardSim/build_vehicle_sim.mos",
+    "_3_StandardSim/build_four_post_sim.mos",
+}
+
+
 def _seed_runtime_root(runtime_root: Path) -> None:
     seed_paths = (
         "vehicle.yml",
@@ -126,7 +132,7 @@ def _seed_runtime_root(runtime_root: Path) -> None:
         else:
             if target.is_dir():
                 shutil.rmtree(target)
-            if target.exists():
+            if target.exists() and rel_path not in APP_OWNED_RUNTIME_FILES:
                 continue
             shutil.copy2(source, target)
     for rel_path in runtime_output_dirs:
@@ -338,6 +344,12 @@ MODELICA_BUILD_TARGETS: dict[str, BuildTargetSpec] = {
     ),
 }
 MODELICA_BUILD_TARGETS_BY_ACTION = {target.action_id: target for target in MODELICA_BUILD_TARGETS.values()}
+MODELICA_RUN_TARGETS_BY_ACTION = {
+    "run-ramp-steer": MODELICA_BUILD_TARGETS["vehicle"],
+    "run-steady-state": MODELICA_BUILD_TARGETS["vehicle"],
+    "run-transient": MODELICA_BUILD_TARGETS["vehicle"],
+    "run-four-post": MODELICA_BUILD_TARGETS["four_post"],
+}
 BUILD_METADATA_FILENAME = ".bobsim_build.json"
 
 
@@ -4186,8 +4198,9 @@ def _run_modelica_build_action(action: ActionSpec, target: BuildTargetSpec, job_
             JOBS.append_log(
                 job_id,
                 f"{target.label} build completed, but required build artifacts were missing "
-                f"in {target.build_dir}: {missing}.\n",
+                f"in {target.build_dir}: {missing}. Stopping before simulation run.\n",
             )
+            return 1
     return returncode
 
 
@@ -4249,6 +4262,16 @@ def _run_action_process(action: ActionSpec, job_id: str) -> int:
     target = MODELICA_BUILD_TARGETS_BY_ACTION.get(action.id)
     if target:
         return _run_modelica_build_action(action, target, job_id)
+    run_target = MODELICA_RUN_TARGETS_BY_ACTION.get(action.id)
+    if run_target:
+        missing = _modelica_build_missing_files(run_target)
+        if missing:
+            JOBS.append_log(
+                job_id,
+                f"{run_target.label} is not built yet. Run {run_target.label} build first. "
+                f"Missing in {run_target.build_dir}: {', '.join(missing)}.\n",
+            )
+            return 2
     return _run_subprocess_action(action, job_id)
 
 

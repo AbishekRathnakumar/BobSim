@@ -301,6 +301,39 @@ def test_deploy_artifacts_are_named_bobsim() -> None:
     assert deploy.DIST_ROOT.name == "BobSim"
 
 
+def test_runtime_seed_refreshes_app_owned_build_scripts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "package"
+    runtime_root = tmp_path / "runtime"
+    package_script = package_root / "_3_StandardSim/build_vehicle_sim.mos"
+    package_vehicle = package_root / "vehicle.yml"
+    runtime_script = runtime_root / "_3_StandardSim/build_vehicle_sim.mos"
+    runtime_vehicle = runtime_root / "vehicle.yml"
+
+    package_script.parent.mkdir(parents=True)
+    runtime_script.parent.mkdir(parents=True)
+    package_script.write_text("// new build script\n", encoding="utf-8")
+    runtime_script.write_text("// stale build script\n", encoding="utf-8")
+    package_vehicle.write_text("vehicle:\n  name: Packaged\n", encoding="utf-8")
+    runtime_vehicle.write_text("vehicle:\n  name: UserCar\n", encoding="utf-8")
+    monkeypatch.setattr(app, "PACKAGE_ROOT", package_root)
+
+    app._seed_runtime_root(runtime_root)
+
+    assert runtime_script.read_text(encoding="utf-8") == "// new build script\n"
+    assert runtime_vehicle.read_text(encoding="utf-8") == "vehicle:\n  name: UserCar\n"
+
+
+def test_modelica_build_scripts_use_cross_platform_directory_creation() -> None:
+    for rel_path in ("_3_StandardSim/build_vehicle_sim.mos", "_3_StandardSim/build_four_post_sim.mos"):
+        text = Path(rel_path).read_text(encoding="utf-8")
+
+        assert 'system("mkdir -p "' not in text
+        assert "mkdir(buildDir);" in text
+
+
 def test_modelica_build_ready_accepts_windows_executable_suffix(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -316,6 +349,55 @@ def test_modelica_build_ready_accepts_windows_executable_suffix(
     assert app._modelica_build_dir_ready(target)
     assert app._modelica_build_missing_files(target) == []
     assert app._modelica_build_exe_path(target).endswith(f"{target.exec_name}.exe")
+
+
+def test_modelica_build_action_fails_when_artifacts_are_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_openmodelica_settings(monkeypatch)
+    monkeypatch.setattr(app, "ROOT", tmp_path)
+    fake_openmodelica_install(tmp_path, monkeypatch)
+    (tmp_path / "vehicle.yml").write_text("vehicle:\n  name: MissingArtifacts\n", encoding="utf-8")
+    target = app.MODELICA_BUILD_TARGETS["vehicle"]
+    script_path = tmp_path / target.script
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text("// fake build script\n", encoding="utf-8")
+    stack = {
+        "written_to_boblib": True,
+        "latest_modified": 1.0,
+        "signatures": {"vehicle": {"generated": "generated-vehicle-signature"}},
+    }
+    monkeypatch.setattr(app, "modelica_stack_status_payload", lambda _vehicle_path, _root: stack)
+    monkeypatch.setattr(app, "_run_subprocess_action", lambda _action, _job_id: 0)
+
+    job = app.JOBS.create("build-vehicle", "Build VehicleSim", [])
+    returncode = app._run_action_process(app.ACTION_SPECS["build-vehicle"], job["id"])
+
+    assert returncode == 1
+    assert "Stopping before simulation run" in app.JOBS.get(job["id"])["log"]
+
+
+def test_standard_run_action_fails_cleanly_when_vehicle_sim_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_openmodelica_settings(monkeypatch)
+    monkeypatch.setattr(app, "ROOT", tmp_path)
+    fake_openmodelica_install(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        app,
+        "_run_subprocess_action",
+        lambda _action, _job_id: (_ for _ in ()).throw(AssertionError("subprocess should not start")),
+    )
+
+    job = app.JOBS.create("run-ramp-steer", "Run RampSteerEval", [])
+    returncode = app._run_action_process(app.ACTION_SPECS["run-ramp-steer"], job["id"])
+
+    assert returncode == 2
+    log = app.JOBS.get(job["id"])["log"]
+    assert "VehicleSim is not built yet" in log
+    assert "_3_StandardSim/BuildBobLib/VehicleSim" in log
 
 
 def test_modelica_runner_accepts_exe_suffix(tmp_path: Path) -> None:
