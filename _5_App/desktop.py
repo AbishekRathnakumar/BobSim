@@ -7,6 +7,7 @@ import socket
 import sys
 import threading
 import time
+from typing import Literal
 import webbrowser
 
 from _5_App import app as bobsim_app
@@ -43,7 +44,7 @@ def _can_start_embedded_window() -> bool:
     return True
 
 
-def _preferred_webview_gui() -> str | None:
+def _preferred_webview_gui() -> Literal["qt"] | None:
     if sys.platform.startswith("linux") and _has_qt_webengine():
         return "qt"
     return None
@@ -81,7 +82,11 @@ def main() -> None:
 
     try:
         webview.create_window(APP_TITLE, url, width=1440, height=960, min_size=(1100, 700))
-        webview.start(gui=_preferred_webview_gui())
+        preferred_gui = _preferred_webview_gui()
+        if preferred_gui:
+            webview.start(gui=preferred_gui)
+        else:
+            webview.start()
     except Exception as exc:
         print(f"Embedded BobDyn window failed to start: {exc}", flush=True)
         _open_browser_and_wait(url, server_thread)

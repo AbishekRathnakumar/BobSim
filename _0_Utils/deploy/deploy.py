@@ -321,8 +321,8 @@ def clean_generated_artifacts(include_deploy: bool = True) -> None:
         _remove_path(visual_artifact)
 
     if include_deploy:
-        for path in (DEPLOY_ROOT / "dist", WORK_ROOT.parent, ASSET_ROOT):
-            _remove_path(path)
+        for deploy_path in (DEPLOY_ROOT / "dist", WORK_ROOT.parent, ASSET_ROOT):
+            _remove_path(deploy_path)
 
     print("Generated artifacts cleaned.", flush=True)
 
@@ -681,7 +681,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--assets-only", action="store_true", help="Only generate deploy icon assets.")
     parser.add_argument("--clean", action="store_true", help="Remove generated artifacts and deploy outputs.")
     parser.add_argument("--release", action="store_true", help="Clean, build, and package a release artifact.")
-    parser.add_argument("--package-release", action="store_true", help="Package the current deploy artifact for release.")
+    parser.add_argument(
+        "--package-release",
+        action="store_true",
+        help="Package the current deploy artifact for release.",
+    )
     parser.add_argument("--upload-release", action="store_true", help="Upload packaged release files with GitHub CLI.")
     parser.add_argument("--version", help="Release version to use with --package-release.")
     parser.add_argument("--tag", help="GitHub release tag to use with --upload-release.")
