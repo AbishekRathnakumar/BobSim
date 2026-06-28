@@ -38,11 +38,6 @@ from _5_App.modelica_generator import (
 APP_NAME = "BobDyn"
 PACKAGE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])).resolve()
 FROZEN_APP = bool(getattr(sys, "frozen", False))
-EXTERNAL_TOOLCHAIN_ENV = "BOBDYN_ENABLE_EXTERNAL_TOOLS"
-
-
-def _env_truthy(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _default_runtime_root() -> Path:
@@ -429,7 +424,7 @@ WORKFLOWS: tuple[WorkflowSpec, ...] = (
 
 
 def external_toolchain_enabled() -> bool:
-    return _env_truthy(EXTERNAL_TOOLCHAIN_ENV) or not FROZEN_APP
+    return True
 
 
 def external_toolchain_available() -> bool:
@@ -442,16 +437,13 @@ def external_toolchain_payload() -> dict[str, Any]:
     available = enabled and omc_path is not None
     if available:
         reason = "OpenModelica toolchain available."
-    elif FROZEN_APP and not enabled:
-        reason = "Simulation runs are not included in this desktop build."
     else:
-        reason = "OpenModelica `omc` was not found on PATH."
+        reason = "OpenModelica was not found. Install OpenModelica to build and run simulations locally."
     return {
         "available": available,
         "enabled": enabled,
         "frozen": FROZEN_APP,
         "omc": omc_path,
-        "enable_env": EXTERNAL_TOOLCHAIN_ENV,
         "reason": reason,
     }
 

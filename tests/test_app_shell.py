@@ -7,6 +7,7 @@ import shutil
 import pytest
 import yaml
 
+from _0_Utils.deploy import deploy
 from _5_App import app
 
 
@@ -43,37 +44,48 @@ def test_app_workflow_actions_are_allowlisted() -> None:
         assert not Path(action.argv[0]).is_absolute() or action.argv[0] == app.PYTHON
 
 
-def test_frozen_desktop_disables_external_toolchain_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_frozen_desktop_uses_local_openmodelica_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(app, "FROZEN_APP", True)
-    monkeypatch.delenv(app.EXTERNAL_TOOLCHAIN_ENV, raising=False)
     monkeypatch.setattr(app.shutil, "which", lambda name: "/usr/bin/omc" if name == "omc" else None)
 
     payload = app.external_toolchain_payload()
-    assert payload["enabled"] is False
-    assert payload["available"] is False
+    assert payload["enabled"] is True
+    assert payload["available"] is True
     assert payload["frozen"] is True
-    assert app.action_available(app.ACTION_SPECS["build-vehicle"]) is False
+    assert "enable_env" not in payload
+    assert app.action_available(app.ACTION_SPECS["build-vehicle"]) is True
+
+    workflow = next(workflow for workflow in app.WORKFLOWS if workflow.id == "ramp-steer")
+    workflow_json = app.workflow_payload(workflow)
+    assert workflow_json["available"] is True
+    assert workflow_json["unavailable_reason"] == ""
+
+
+def test_desktop_reports_missing_openmodelica_without_running_builds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app, "FROZEN_APP", True)
+    monkeypatch.setattr(app.shutil, "which", lambda _name: None)
+
+    payload = app.external_toolchain_payload()
+    assert payload["enabled"] is True
+    assert payload["available"] is False
+    assert payload["reason"] == "OpenModelica was not found. Install OpenModelica to build and run simulations locally."
 
     workflow = next(workflow for workflow in app.WORKFLOWS if workflow.id == "ramp-steer")
     workflow_json = app.workflow_payload(workflow)
     assert workflow_json["available"] is False
-    assert workflow_json["unavailable_reason"] == "Simulation runs are not included in this desktop build."
-    assert app.EXTERNAL_TOOLCHAIN_ENV not in workflow_json["unavailable_reason"]
+    assert workflow_json["unavailable_reason"] == payload["reason"]
 
-    with pytest.raises(RuntimeError, match="not included in this desktop build"):
+    with pytest.raises(RuntimeError, match="OpenModelica was not found"):
         app.start_workflow("ramp-steer")
 
 
-def test_frozen_desktop_can_opt_into_external_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app, "FROZEN_APP", True)
-    monkeypatch.setenv(app.EXTERNAL_TOOLCHAIN_ENV, "1")
-    monkeypatch.setattr(app.shutil, "which", lambda name: "/usr/bin/omc" if name == "omc" else None)
+def test_deploy_does_not_bundle_generated_modelica_binaries() -> None:
+    data_paths = set(deploy.DATA_PATHS)
 
-    assert app.external_toolchain_available() is True
-    assert app.action_available(app.ACTION_SPECS["build-vehicle"]) is True
-
-    workflow = next(workflow for workflow in app.WORKFLOWS if workflow.id == "ramp-steer")
-    assert app.workflow_payload(workflow)["available"] is True
+    assert "_3_StandardSim/build_vehicle_sim.mos" in data_paths
+    assert "_3_StandardSim/build_four_post_sim.mos" in data_paths
+    assert "_3_StandardSim/BuildBobLib" not in data_paths
+    assert "_5_App/build_archive" not in data_paths
 
 
 def test_app_can_read_repo_configs() -> None:
