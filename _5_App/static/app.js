@@ -112,6 +112,7 @@ const state = {
   activeParamGroup: null,
   vehicleStartOpen: true,
   dirtyVehicle: false,
+  vehicleSaving: false,
   saveStatusMessage: "",
   vehicleDefinitionState: "pending",
   vehiclePreviewView: "iso",
@@ -180,6 +181,7 @@ const state = {
   cleanVehicleSignature: "",
   suppressUndo: false,
   referenceOpen: false,
+  busyAction: null,
   modelicaWriting: false,
   dark: localStorage.getItem("bobsim-theme") === "dark",
 };
@@ -901,6 +903,43 @@ function renderThemeButton() {
   document.getElementById("theme-toggle-btn").textContent = state.dark ? "Light" : "Dark";
 }
 
+function actionBusy(actionKey) {
+  return Boolean(actionKey && state.busyAction === actionKey);
+}
+
+function startActionBusy() {
+  return ["start-load", "start-create", "start-import"].includes(state.busyAction);
+}
+
+function actionButtonContent(label, busy) {
+  return `${busy ? `<span class="action-spinner" aria-hidden="true"></span>` : ""}<span>${escapeHtml(label)}</span>`;
+}
+
+function setActionButton(button, { label, busy = false, busyLabel = label, disabled = false, title = "" }) {
+  if (!button) return;
+  button.innerHTML = actionButtonContent(busy ? busyLabel : label, busy);
+  button.disabled = Boolean(disabled || busy);
+  button.classList.toggle("is-loading", busy);
+  button.setAttribute("aria-busy", busy ? "true" : "false");
+  button.title = title || "";
+}
+
+function renderVehicleMenuActions() {
+  const saveButton = document.getElementById("save-vehicle-btn");
+  setActionButton(saveButton, {
+    label: "Save As",
+    busy: state.vehicleSaving && actionBusy("menu-save-vehicle"),
+    busyLabel: "Saving",
+    disabled: state.vehicleSaving || state.modelicaWriting || !state.vehiclePayload,
+  });
+}
+
+function renderBusyActionSurfaces() {
+  renderRailActions();
+  renderVehicleMenuActions();
+  renderVehicleStartModal();
+}
+
 function renderVehicleControls() {
   const sensitivity = document.getElementById("rotation-sensitivity");
   const label = document.getElementById("rotation-sensitivity-value");
@@ -919,23 +958,49 @@ function renderVehicleStartModal() {
   const templatePicker = document.getElementById("start-template-picker");
   const loadButton = document.getElementById("start-load-btn");
   const createButton = document.getElementById("start-create-btn");
+  const importButton = document.getElementById("start-import-btn");
+  const activeButton = document.getElementById("start-active-btn");
+  const startBusy = startActionBusy();
   const loadSources = savedVehicleSources();
   if (loadPicker) {
     loadPicker.innerHTML = loadSources.length
       ? loadSources.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}">Saved: ${escapeHtml(vehicle.label)}</option>`).join("")
       : `<option value="">No saved vehicles yet</option>`;
+    loadPicker.disabled = startBusy;
   }
-  if (loadButton) loadButton.disabled = !loadSources.length;
+  setActionButton(loadButton, {
+    label: "Load Vehicle",
+    busy: actionBusy("start-load"),
+    busyLabel: "Loading",
+    disabled: !loadSources.length || startBusy,
+  });
 
   const templates = state.vehicleTemplates?.templates || [];
   if (templatePicker) {
     templatePicker.innerHTML = templates.map((template) => `
       <option value="${escapeHtml(template.id)}">${escapeHtml(templateArchitectureLabel(template))}</option>
     `).join("");
+    templatePicker.disabled = startBusy;
   }
-  if (createButton) createButton.disabled = !templates.length;
+  setActionButton(createButton, {
+    label: "Create Vehicle",
+    busy: actionBusy("start-create"),
+    busyLabel: "Creating",
+    disabled: !templates.length || startBusy,
+  });
   const nameInput = document.getElementById("start-vehicle-name");
   if (nameInput && !nameInput.value) nameInput.value = nextVehicleName();
+  if (nameInput) nameInput.disabled = startBusy;
+  setActionButton(importButton, {
+    label: "Import YAML",
+    busy: actionBusy("start-import"),
+    busyLabel: "Importing",
+    disabled: startBusy,
+  });
+  setActionButton(activeButton, {
+    label: "Continue Active File",
+    disabled: startBusy,
+  });
 }
 
 function vehicleLoadSources() {
@@ -1084,33 +1149,47 @@ function renderRailActions() {
     secondary.classList.remove("ghost-button");
     const needsVehicleConfig = !activeVehicleConfigReady();
     const canSaveVehicle = Boolean(state.vehiclePayload) && (state.dirtyVehicle || needsVehicleConfig);
-    primary.textContent = "Save Vehicle";
-    primary.disabled = !canSaveVehicle || state.modelicaWriting;
-    primary.title = state.dirtyVehicle
-      ? "Save active vehicle edits and update the saved config"
-      : needsVehicleConfig
-      ? "Save this vehicle config"
-      : "Vehicle has no unsaved edits";
-    secondary.textContent = state.modelicaWriting ? "Writing..." : "Write to MBD";
-    secondary.disabled = !canWriteMbd();
-    secondary.title = mbdWriteDisabledReason();
+    setActionButton(primary, {
+      label: "Save Vehicle",
+      busy: state.vehicleSaving && actionBusy("rail-save-vehicle"),
+      busyLabel: "Saving",
+      disabled: !canSaveVehicle || state.modelicaWriting || state.vehicleSaving,
+      title: state.dirtyVehicle
+        ? "Save active vehicle edits and update the saved config"
+        : needsVehicleConfig
+        ? "Save this vehicle config"
+        : "Vehicle has no unsaved edits",
+    });
+    setActionButton(secondary, {
+      label: "Write to MBD",
+      busy: state.modelicaWriting && actionBusy("rail-write-mbd"),
+      busyLabel: "Writing",
+      disabled: !canWriteMbd() || state.vehicleSaving,
+      title: mbdWriteDisabledReason(),
+    });
     return;
   }
   secondary.classList.add("ghost-button");
   secondary.classList.remove("run-button");
   if (state.view === "studies") {
-    primary.textContent = state.savingResults ? "Saving..." : "Save Results";
-    primary.disabled = !canSaveActiveResults();
-    primary.title = saveActiveResultsDisabledReason();
+    setActionButton(primary, {
+      label: "Save Results",
+      busy: state.savingResults,
+      busyLabel: "Saving",
+      disabled: !canSaveActiveResults(),
+      title: saveActiveResultsDisabledReason(),
+    });
   } else {
     const workflow = selectedWorkflow();
-    primary.textContent = "Configure Simulation";
-    primary.disabled = !canRunStandardWorkflow(workflow);
-    primary.title = canRunStandardWorkflow(workflow) ? "" : standardWorkflowLockedMessage(workflow);
+    setActionButton(primary, {
+      label: "Configure Simulation",
+      disabled: !canRunStandardWorkflow(workflow),
+      title: canRunStandardWorkflow(workflow) ? "" : standardWorkflowLockedMessage(workflow),
+    });
   }
-  secondary.textContent = "Back to Vehicle";
-  secondary.disabled = false;
-  secondary.title = "";
+  setActionButton(secondary, {
+    label: "Back to Vehicle",
+  });
 }
 
 function mbdWriteDisabledReason() {
@@ -1144,6 +1223,7 @@ function renderVehicleLibrary() {
   const saveName = document.getElementById("save-vehicle-name");
   if (saveName && !saveName.value) saveName.value = activeVehicleName();
   syncVehicleLibraryActions();
+  renderVehicleMenuActions();
 }
 
 function openVehicleStartModal() {
@@ -1170,6 +1250,7 @@ function syncVehicleLibraryActions() {
   deleteButton.title = canDelete
     ? "Delete this saved vehicle config"
     : "Only saved vehicle configs can be deleted";
+  renderVehicleMenuActions();
 }
 
 function renderVehicleEditor() {
@@ -2883,34 +2964,44 @@ async function saveVehicleEdits({ successMessage = "Vehicle saved" } = {}) {
   }
 }
 
-async function saveVehicleAs({ useNameInput = true } = {}) {
-  const payload = await saveVehicleEdits({ successMessage: "Vehicle edits saved" });
-  if (!payload) return;
-  const nameInput = document.getElementById("save-vehicle-name");
-  const name = useNameInput && nameInput?.value.trim() ? nameInput.value.trim() : activeVehicleName();
-  setSaveStatus(`Saving ${name}...`);
+async function saveVehicleAs({ useNameInput = true, actionKey = "rail-save-vehicle" } = {}) {
+  if (state.vehicleSaving) return null;
+  state.vehicleSaving = true;
+  state.busyAction = actionKey;
+  renderBusyActionSurfaces();
   try {
-    state.vehicleLibrary = await api("/api/vehicles/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    state.selectedVehicleSource = state.vehicleLibrary.saved?.id || "active";
-    await refreshStatus();
-    await refreshSavedResults();
-    await refreshResultSources();
-    await refreshProcessingWorkflows();
-    renderSetup();
-    setSaveStatus(`Saved ${name}`);
-    return state.vehicleLibrary;
-  } catch (error) {
-    setSaveStatus(error.message || "Could not save vehicle config");
-    renderRailActions();
-    return null;
+    const payload = await saveVehicleEdits({ successMessage: "Vehicle edits saved" });
+    if (!payload) return null;
+    const nameInput = document.getElementById("save-vehicle-name");
+    const name = useNameInput && nameInput?.value.trim() ? nameInput.value.trim() : activeVehicleName();
+    setSaveStatus(`Saving ${name}...`);
+    try {
+      state.vehicleLibrary = await api("/api/vehicles/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      state.selectedVehicleSource = state.vehicleLibrary.saved?.id || "active";
+      await refreshStatus();
+      await refreshSavedResults();
+      await refreshResultSources();
+      await refreshProcessingWorkflows();
+      renderSetup();
+      setSaveStatus(`Saved ${name}`);
+      return state.vehicleLibrary;
+    } catch (error) {
+      setSaveStatus(error.message || "Could not save vehicle config");
+      renderRailActions();
+      return null;
+    }
+  } finally {
+    state.vehicleSaving = false;
+    if (state.busyAction === actionKey) state.busyAction = null;
+    renderBusyActionSurfaces();
   }
 }
 
-async function generateModelicaFromVehicle() {
+async function generateModelicaFromVehicle({ actionKey = "rail-write-mbd" } = {}) {
   if (!canWriteMbd()) {
     const saveStatus = document.getElementById("save-status");
     if (saveStatus) saveStatus.textContent = mbdWriteDisabledReason();
@@ -2918,7 +3009,8 @@ async function generateModelicaFromVehicle() {
     return;
   }
   state.modelicaWriting = true;
-  renderRailActions();
+  state.busyAction = actionKey;
+  renderBusyActionSurfaces();
   renderModelicaStack();
   try {
     const generated = await api("/api/modelica/generate", {
@@ -2941,7 +3033,8 @@ async function generateModelicaFromVehicle() {
     renderModelicaStack();
   } finally {
     state.modelicaWriting = false;
-    renderRailActions();
+    if (state.busyAction === actionKey) state.busyAction = null;
+    renderBusyActionSurfaces();
     renderModelicaStack();
   }
 }
@@ -2994,76 +3087,106 @@ async function loadVehicleSourceById(sourceId) {
 
 async function loadVehicleFromStart() {
   const sourceId = document.getElementById("start-load-picker")?.value;
-  if (!sourceId) return;
-  state.vehicleStartOpen = false;
-  await loadVehicleSourceById(sourceId);
-  render();
+  if (!sourceId || startActionBusy()) return;
+  state.busyAction = "start-load";
+  renderVehicleStartModal();
+  try {
+    await loadVehicleSourceById(sourceId);
+    state.vehicleStartOpen = false;
+    render();
+  } catch (error) {
+    setSaveStatus(error.message || "Could not load vehicle");
+    renderVehicleStartModal();
+  } finally {
+    if (state.busyAction === "start-load") state.busyAction = null;
+    renderBusyActionSurfaces();
+  }
 }
 
 async function createVehicleFromStart() {
   const templateId = document.getElementById("start-template-picker")?.value;
   const name = document.getElementById("start-vehicle-name")?.value.trim() || nextVehicleName();
-  if (!templateId) return;
-  state.vehiclePayload = await api("/api/vehicle-template", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ template_id: templateId }),
-  });
-  state.vehiclePayload = await api("/api/configs/vehicle", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      mode: "patch",
-      values: { [JSON.stringify(["vehicle", "name"])]: name },
-    }),
-  });
-  acceptCleanVehiclePayload();
-  await refreshStatus();
-  state.vehicleLibrary = await api("/api/vehicles/save", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  await refreshStatus();
-  await refreshSavedResults();
-  await refreshResultSources();
-  await refreshProcessingWorkflows();
-  await refreshVehicleDiagnostics(state.vehiclePayload?.data || {});
-  await refreshTireTemplates();
-  if (state.tireTemplates?.templates?.length) {
-    await loadTirTemplate(defaultTirTemplateName());
+  if (!templateId || startActionBusy()) return;
+  state.busyAction = "start-create";
+  renderVehicleStartModal();
+  try {
+    state.vehiclePayload = await api("/api/vehicle-template", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ template_id: templateId }),
+    });
+    state.vehiclePayload = await api("/api/configs/vehicle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: "patch",
+        values: { [JSON.stringify(["vehicle", "name"])]: name },
+      }),
+    });
+    acceptCleanVehiclePayload();
+    await refreshStatus();
+    state.vehicleLibrary = await api("/api/vehicles/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    await refreshStatus();
+    await refreshSavedResults();
+    await refreshResultSources();
+    await refreshProcessingWorkflows();
+    await refreshVehicleDiagnostics(state.vehiclePayload?.data || {});
+    await refreshTireTemplates();
+    if (state.tireTemplates?.templates?.length) {
+      await loadTirTemplate(defaultTirTemplateName());
+    }
+    state.selectedVehicleSource = state.vehicleLibrary.saved?.id || "active";
+    state.vehicleStartOpen = false;
+    const saveName = document.getElementById("save-vehicle-name");
+    if (saveName) saveName.value = name;
+    render();
+  } catch (error) {
+    setSaveStatus(error.message || "Could not create vehicle");
+    renderVehicleStartModal();
+  } finally {
+    if (state.busyAction === "start-create") state.busyAction = null;
+    renderBusyActionSurfaces();
   }
-  state.selectedVehicleSource = state.vehicleLibrary.saved?.id || "active";
-  state.vehicleStartOpen = false;
-  const saveName = document.getElementById("save-vehicle-name");
-  if (saveName) saveName.value = name;
-  render();
 }
 
-async function importVehicleFile(file) {
-  if (!file) return;
-  const text = await file.text();
-  state.vehiclePayload = await api("/api/configs/vehicle", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode: "raw", text }),
-  });
-  acceptCleanVehiclePayload();
-  await refreshStatus();
-  state.vehicleLibrary = await api("/api/vehicles");
-  state.vehicleTemplates = await api("/api/vehicle-templates");
-  await refreshSavedResults();
-  await refreshResultSources();
-  await refreshProcessingWorkflows();
-  await refreshVehicleDiagnostics(state.vehiclePayload?.data || {});
-  await refreshTireTemplates();
-  if (state.tireTemplates?.templates?.length) {
-    await loadTirTemplate(defaultTirTemplateName());
+async function importVehicleFile(file, { actionKey = "start-import" } = {}) {
+  if (!file || startActionBusy()) return;
+  state.busyAction = actionKey;
+  renderVehicleStartModal();
+  try {
+    const text = await file.text();
+    state.vehiclePayload = await api("/api/configs/vehicle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "raw", text }),
+    });
+    acceptCleanVehiclePayload();
+    await refreshStatus();
+    state.vehicleLibrary = await api("/api/vehicles");
+    state.vehicleTemplates = await api("/api/vehicle-templates");
+    await refreshSavedResults();
+    await refreshResultSources();
+    await refreshProcessingWorkflows();
+    await refreshVehicleDiagnostics(state.vehiclePayload?.data || {});
+    await refreshTireTemplates();
+    if (state.tireTemplates?.templates?.length) {
+      await loadTirTemplate(defaultTirTemplateName());
+    }
+    state.selectedVehicleSource = "active";
+    state.vehicleStartOpen = false;
+    document.getElementById("save-vehicle-name").value = file.name.replace(/\.(ya?ml)$/i, "");
+    render();
+  } catch (error) {
+    setSaveStatus(error.message || "Could not import vehicle");
+    renderVehicleStartModal();
+  } finally {
+    if (state.busyAction === actionKey) state.busyAction = null;
+    renderBusyActionSurfaces();
   }
-  state.selectedVehicleSource = "active";
-  state.vehicleStartOpen = false;
-  document.getElementById("save-vehicle-name").value = file.name.replace(/\.(ya?ml)$/i, "");
-  render();
 }
 
 async function applyVehicleTemplate(templateId) {
@@ -6531,14 +6654,52 @@ function finishGeometryDrag(pointerId) {
   return true;
 }
 
+function isMiddleClick(event) {
+  return event?.button === 1;
+}
+
+function isPanClick(event) {
+  return Boolean(event?.ctrlKey || isMiddleClick(event));
+}
+
+function dragPointerId(event) {
+  return event?.pointerId ?? "mouse";
+}
+
+function captureDragPointer(canvas, event) {
+  if (event?.pointerId === undefined || typeof canvas?.setPointerCapture !== "function") return;
+  canvas.setPointerCapture(event.pointerId);
+}
+
+function isCanvasAuxActionArea() {
+  return isSpatialPreviewArea() || isSurfaceMapPreviewArea();
+}
+
+function suppressMiddleCanvasAuxAction(event) {
+  if (!isMiddleClick(event) || !isCanvasAuxActionArea()) return false;
+  event.preventDefault();
+  return true;
+}
+
+function startMiddleCanvasPan(event) {
+  if (!suppressMiddleCanvasAuxAction(event)) return false;
+  if (state.vehicleDrag || state.tireSurfaceDrag) return true;
+  if (isSurfaceMapPreviewArea()) return startTireSurfaceDrag(event);
+  if (isSpatialPreviewArea()) {
+    startPreviewDrag(event, "pan");
+    return true;
+  }
+  return false;
+}
+
 function startPreviewDrag(event, mode = "rotate") {
   const canvas = document.getElementById("vehicle-canvas");
-  if (!canvas || event.button !== 0) return;
+  if (!canvas || (event.button !== 0 && !(mode === "pan" && isMiddleClick(event)))) return;
   const width = state.geometryScene?.width || canvas.getBoundingClientRect().width || 800;
   const height = state.geometryScene?.height || canvas.getBoundingClientRect().height || 600;
-  canvas.setPointerCapture(event.pointerId);
+  captureDragPointer(canvas, event);
   state.vehicleDrag = {
-    pointerId: event.pointerId,
+    pointerId: dragPointerId(event),
     mode,
     x: event.clientX,
     y: event.clientY,
@@ -6555,7 +6716,7 @@ function startPreviewDrag(event, mode = "rotate") {
 
 function updatePreviewDrag(event) {
   const drag = state.vehicleDrag;
-  if (!drag || drag.pointerId !== event.pointerId || !isSpatialPreviewArea()) return false;
+  if (!drag || drag.pointerId !== dragPointerId(event) || !isSpatialPreviewArea()) return false;
   const dx = event.clientX - drag.x;
   const dy = event.clientY - drag.y;
   if (drag.mode === "pan") {
@@ -6581,13 +6742,13 @@ function finishPreviewDrag(pointerId) {
 
 function startTireSurfaceDrag(event) {
   const canvas = document.getElementById("vehicle-canvas");
-  if (!canvas || event.button !== 0) return;
+  if (!canvas || (event.button !== 0 && !isMiddleClick(event))) return;
   const hit = hitTestTireSurfacePanel(event);
   if (!hit) return false;
-  canvas.setPointerCapture(event.pointerId);
+  captureDragPointer(canvas, event);
   state.tireSurfaceDrag = {
-    pointerId: event.pointerId,
-    mode: event.ctrlKey ? "pan" : "rotate",
+    pointerId: dragPointerId(event),
+    mode: isPanClick(event) ? "pan" : "rotate",
     x: event.clientX,
     y: event.clientY,
     yaw: state.tireSurfaceYaw,
@@ -6602,7 +6763,7 @@ function startTireSurfaceDrag(event) {
 
 function updateTireSurfaceDrag(event) {
   const drag = state.tireSurfaceDrag;
-  if (!drag || drag.pointerId !== event.pointerId || !isSurfaceMapPreviewArea()) return false;
+  if (!drag || drag.pointerId !== dragPointerId(event) || !isSurfaceMapPreviewArea()) return false;
   const dx = event.clientX - drag.x;
   const dy = event.clientY - drag.y;
   if (drag.mode === "pan") {
@@ -12266,7 +12427,7 @@ function wireVehicleCanvas() {
     }
     if (handleSuspensionPlotClick(event)) return;
     if (!isSpatialPreviewArea()) return;
-    if (event.ctrlKey) {
+    if (isPanClick(event)) {
       startPreviewDrag(event, "pan");
       return;
     }
@@ -12279,6 +12440,8 @@ function wireVehicleCanvas() {
     }
     startPreviewDrag(event, "rotate");
   });
+  canvas.addEventListener("mousedown", startMiddleCanvasPan);
+  canvas.addEventListener("auxclick", suppressMiddleCanvasAuxAction);
   canvas.addEventListener("pointermove", (event) => {
     if (isArchitecturePreviewArea()) {
       updateArchitectureHover(event);
@@ -12306,6 +12469,15 @@ function wireVehicleCanvas() {
     if (finishPreviewDrag(event.pointerId)) return;
   });
   canvas.addEventListener("wheel", handlePreviewWheel, { passive: false });
+  window.addEventListener("mousemove", (event) => {
+    if (updateTireSurfaceDrag(event)) return;
+    if (updatePreviewDrag(event)) return;
+  });
+  window.addEventListener("mouseup", (event) => {
+    const pointerId = dragPointerId(event);
+    if (finishTireSurfaceDrag(pointerId)) return;
+    if (finishPreviewDrag(pointerId)) return;
+  });
   canvas.addEventListener("pointermove", updateGeometryHover);
   canvas.addEventListener("pointermove", updateSuspensionPlotHover);
   canvas.addEventListener("pointermove", updateTireSurfaceHover);
@@ -12630,7 +12802,7 @@ function wireEvents() {
     importVehicleFile(event.target.files?.[0]);
     event.target.value = "";
   });
-  document.getElementById("save-vehicle-btn").addEventListener("click", saveVehicleAs);
+  document.getElementById("save-vehicle-btn").addEventListener("click", () => saveVehicleAs({ actionKey: "menu-save-vehicle" }));
   document.getElementById("save-raw-btn").addEventListener("click", saveRawVehicle);
   document.getElementById("run-workflow-btn").addEventListener("click", startSelectedWorkflow);
   document.getElementById("run-study-btn").addEventListener("click", saveActiveResults);
@@ -12673,12 +12845,12 @@ function wireEvents() {
   document.getElementById("setup-prev-btn")?.addEventListener("click", () => navigateParameterStep(-1));
   document.getElementById("setup-next-btn")?.addEventListener("click", () => navigateParameterStep(1));
   document.getElementById("rail-primary-btn").addEventListener("click", async () => {
-    if (state.view === "setup") await saveVehicleAs({ useNameInput: false });
+    if (state.view === "setup") await saveVehicleAs({ useNameInput: false, actionKey: "rail-save-vehicle" });
     else if (state.view === "studies") await saveActiveResults();
     else await configureSimulationWorkflow(selectedWorkflow()?.id);
   });
   document.getElementById("rail-secondary-btn").addEventListener("click", async () => {
-    if (state.view === "setup") await generateModelicaFromVehicle();
+    if (state.view === "setup") await generateModelicaFromVehicle({ actionKey: "rail-write-mbd" });
     else setView("setup");
   });
   document.querySelectorAll(".rail-item").forEach((button) => {

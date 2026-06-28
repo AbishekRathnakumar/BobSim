@@ -8,7 +8,9 @@ import pytest
 import yaml
 
 from _0_Utils.deploy import deploy
+from _3_StandardSim._modelica_runner import ModelicaRunner
 from _5_App import app
+from _5_App import desktop
 
 
 def clear_openmodelica_settings(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -55,6 +57,38 @@ def test_app_workflow_actions_are_allowlisted() -> None:
     for action in app.ACTION_SPECS.values():
         assert action.argv
         assert not Path(action.argv[0]).is_absolute() or action.argv[0] == app.PYTHON
+
+
+@pytest.mark.parametrize(
+    ("argv", "normalized"),
+    [
+        (["BobSim", "--run-module", "_3_StandardSim.SomeEval"], ["BobSim", "--run-module", "_3_StandardSim.SomeEval"]),
+        (
+            ["BobSim", "-m", "_3_StandardSim.SomeEval", "config.yml"],
+            ["BobSim", "--run-module", "_3_StandardSim.SomeEval", "config.yml"],
+        ),
+    ],
+)
+def test_desktop_forwards_python_module_invocations_without_opening_window(
+    argv: list[str],
+    normalized: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(desktop.sys, "argv", argv)
+    monkeypatch.setattr(desktop, "bobsim_app", type("FakeApp", (), {"main": lambda _self: calls.append("main")})())
+    monkeypatch.setattr(desktop.multiprocessing, "freeze_support", lambda: calls.append("freeze_support"))
+    monkeypatch.setattr(
+        desktop,
+        "_available_port",
+        lambda _host: (_ for _ in ()).throw(AssertionError("desktop window should not start")),
+    )
+
+    desktop.main()
+
+    assert calls == ["freeze_support", "main"]
+    assert desktop.sys.argv == normalized
 
 
 def test_desktop_reports_missing_openmodelica_without_running_builds(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -267,6 +301,37 @@ def test_deploy_artifacts_are_named_bobsim() -> None:
     assert deploy.DIST_ROOT.name == "BobSim"
 
 
+def test_modelica_build_ready_accepts_windows_executable_suffix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app, "ROOT", tmp_path)
+    monkeypatch.setattr(app.platform, "system", lambda: "Windows")
+    target = app.MODELICA_BUILD_TARGETS["vehicle"]
+    build_dir = tmp_path / target.build_dir
+    build_dir.mkdir(parents=True)
+    (build_dir / f"{target.exec_name}.exe").write_text("exe", encoding="utf-8")
+    (build_dir / f"{target.exec_name}_init.xml").write_text("<init />", encoding="utf-8")
+
+    assert app._modelica_build_dir_ready(target)
+    assert app._modelica_build_missing_files(target) == []
+    assert app._modelica_build_exe_path(target).endswith(f"{target.exec_name}.exe")
+
+
+def test_modelica_runner_accepts_exe_suffix(tmp_path: Path) -> None:
+    build_dir = tmp_path / "build"
+    exec_name = "BobLib.Experiments.Standards.VehicleSim"
+    build_dir.mkdir()
+    (build_dir / f"{exec_name}.exe").write_text("exe", encoding="utf-8")
+    (build_dir / f"{exec_name}_init.xml").write_text("<init />", encoding="utf-8")
+
+    runner = ModelicaRunner(build_dir=build_dir, exec_name=exec_name, simulation={})
+    command = runner._build_command(build_dir / "overrides.txt", build_dir / "result.csv")
+
+    assert runner.exe_path.name == f"{exec_name}.exe"
+    assert Path(command[0]).name == f"{exec_name}.exe"
+
+
 def test_app_can_read_repo_configs() -> None:
     payload = app.read_text_payload("_3_StandardSim/RampSteerEval/ramp_steer_eval_config.yml")
 
@@ -381,6 +446,24 @@ def test_frontend_tire_tools_show_save_update_spinner() -> None:
     assert ".tir-status-row" in styles
     assert ".tir-spinner" in styles
     assert "@keyframes tir-spin" in styles
+
+
+def test_frontend_middle_click_pans_3d_interactive_plots() -> None:
+    app_js = (app.ROOT / "_5_App/static/app.js").read_text(encoding="utf-8")
+
+    assert "function isMiddleClick(event)" in app_js
+    assert "function isPanClick(event)" in app_js
+    assert "event?.ctrlKey || isMiddleClick(event)" in app_js
+    assert 'mode === "pan" && isMiddleClick(event)' in app_js
+    assert 'mode: isPanClick(event) ? "pan" : "rotate"' in app_js
+    assert "if (isPanClick(event))" in app_js
+    assert "function suppressMiddleCanvasAuxAction(event)" in app_js
+    assert "function startMiddleCanvasPan(event)" in app_js
+    assert "function dragPointerId(event)" in app_js
+    assert 'canvas.addEventListener("mousedown", startMiddleCanvasPan);' in app_js
+    assert 'canvas.addEventListener("auxclick", suppressMiddleCanvasAuxAction);' in app_js
+    assert 'window.addEventListener("mousemove", (event) =>' in app_js
+    assert 'window.addEventListener("mouseup", (event) =>' in app_js
 
 
 def test_frontend_powertrain_subsystem_tabs_wrap_before_clipping() -> None:

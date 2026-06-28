@@ -42,6 +42,20 @@ MODELICA_OVERRIDE_ALIASES = {
 }
 
 
+def _modelica_exec_base_name(exec_name: str) -> str:
+    return exec_name[:-4] if exec_name.lower().endswith(".exe") else exec_name
+
+
+def _modelica_executable_candidates(build_dir: Path, exec_name: str) -> list[Path]:
+    base_name = _modelica_exec_base_name(exec_name)
+    names = [exec_name]
+    if not exec_name.lower().endswith(".exe"):
+        names.append(f"{exec_name}.exe")
+    else:
+        names.append(base_name)
+    return [build_dir / name for name in dict.fromkeys(names)]
+
+
 def _first_not_none(*values: Any) -> Any:
     for value in values:
         if value is not None:
@@ -53,14 +67,17 @@ def _first_not_none(*values: Any) -> Any:
 class ModelicaRunner:
     def __init__(self, build_dir, exec_name, simulation):
         self.build_dir = Path(build_dir).resolve()
-        self.exec_name = exec_name
+        self.exec_name = _modelica_exec_base_name(str(exec_name))
         self.simulation = simulation or {}
 
-        self.exe_path = self.build_dir / exec_name
-        self.init_xml = self.build_dir / f"{exec_name}_init.xml"
+        executable_candidates = _modelica_executable_candidates(self.build_dir, str(exec_name))
+        self.init_xml = self.build_dir / f"{self.exec_name}_init.xml"
 
-        if not self.exe_path.exists():
-            raise FileNotFoundError(f"Executable not found: {self.exe_path}")
+        exe_path = next((candidate for candidate in executable_candidates if candidate.exists()), None)
+        if exe_path is None:
+            expected = " or ".join(str(candidate) for candidate in executable_candidates)
+            raise FileNotFoundError(f"Executable not found. Expected one of: {expected}")
+        self.exe_path = exe_path
 
         if not self.init_xml.exists():
             raise FileNotFoundError(f"Init XML not found: {self.init_xml}")
@@ -600,7 +617,7 @@ class ModelicaRunner:
         # in the current working directory. Therefore subprocess.run uses
         # cwd=self.build_dir, and the executable is launched locally.
         cmd = [
-            f"./{self.exec_name}",
+            str(self.exe_path),
             f"-overrideFile={override_file}",
             f"-r={result_file}",
         ]

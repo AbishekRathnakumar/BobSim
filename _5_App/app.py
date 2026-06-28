@@ -3890,12 +3890,47 @@ def read_text_payload(raw_path: str) -> dict[str, Any]:
     }
 
 
+def _modelica_build_exe_names(target: BuildTargetSpec) -> tuple[str, ...]:
+    exe_name = target.exec_name
+    names = [exe_name]
+    if not exe_name.lower().endswith(".exe"):
+        windows_name = f"{exe_name}.exe"
+        if platform.system() == "Windows":
+            names.insert(0, windows_name)
+        else:
+            names.append(windows_name)
+    return tuple(dict.fromkeys(names))
+
+
+def _modelica_build_exe_file(target: BuildTargetSpec, build_dir: Path | None = None) -> Path | None:
+    directory = build_dir or _safe_repo_path(target.build_dir)
+    for name in _modelica_build_exe_names(target):
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _modelica_build_exe_path(target: BuildTargetSpec) -> str:
-    return f"{target.build_dir}/{target.exec_name}"
+    exe_file = _modelica_build_exe_file(target)
+    if exe_file is not None:
+        return exe_file.relative_to(ROOT).as_posix()
+    return f"{target.build_dir}/{_modelica_build_exe_names(target)[0]}"
 
 
 def _modelica_build_init_name(target: BuildTargetSpec) -> str:
     return f"{target.exec_name}_init.xml"
+
+
+def _modelica_build_missing_files(target: BuildTargetSpec, build_dir: Path | None = None) -> list[str]:
+    directory = build_dir or _safe_repo_path(target.build_dir)
+    missing: list[str] = []
+    if _modelica_build_exe_file(target, directory) is None:
+        missing.append("one executable: " + " or ".join(_modelica_build_exe_names(target)))
+    init_name = _modelica_build_init_name(target)
+    if not (directory / init_name).is_file():
+        missing.append(init_name)
+    return missing
 
 
 def _host_build_fingerprint() -> dict[str, str]:
@@ -3955,7 +3990,7 @@ def _modelica_build_archive_dir(target: BuildTargetSpec, signature: str) -> Path
 
 def _modelica_build_dir_ready(target: BuildTargetSpec, build_dir: Path | None = None) -> bool:
     directory = build_dir or _safe_repo_path(target.build_dir)
-    return (directory / target.exec_name).is_file() and (directory / _modelica_build_init_name(target)).is_file()
+    return not _modelica_build_missing_files(target, directory)
 
 
 def _modelica_build_metadata_path(build_dir: Path) -> Path:
@@ -4107,7 +4142,9 @@ def _modelica_existing_build_matches(
     if metadata:
         return metadata.get("signature") == signature["signature"]
 
-    exe_path = build_dir / target.exec_name
+    exe_path = _modelica_build_exe_file(target, build_dir)
+    if exe_path is None:
+        return False
     script_path = _safe_repo_path(target.script)
     latest_input_modified = max(
         float(stack.get("latest_modified") or 0.0),
@@ -4145,7 +4182,12 @@ def _run_modelica_build_action(action: ActionSpec, target: BuildTargetSpec, job_
         if _store_modelica_build_archive(target, signature, job_id):
             JOBS.append_log(job_id, f"{target.label} build archived for signature {short_signature}.\n")
         else:
-            JOBS.append_log(job_id, f"{target.label} build completed, but required executable/init XML were missing.\n")
+            missing = ", ".join(_modelica_build_missing_files(target)) or "unknown artifacts"
+            JOBS.append_log(
+                job_id,
+                f"{target.label} build completed, but required build artifacts were missing "
+                f"in {target.build_dir}: {missing}.\n",
+            )
     return returncode
 
 

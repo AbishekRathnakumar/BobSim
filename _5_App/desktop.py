@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import closing
 import importlib.util
+import multiprocessing
 import os
 import socket
 import sys
@@ -10,11 +11,27 @@ import time
 from typing import Literal
 import webbrowser
 
-from _5_App import app as bobsim_app
-
 
 APP_TITLE = "BobSim"
 HOST = "127.0.0.1"
+bobsim_app = None
+
+
+def _bobsim_app():
+    global bobsim_app
+    if bobsim_app is None:
+        from _5_App import app as imported_app
+
+        bobsim_app = imported_app
+    return bobsim_app
+
+
+def _normalize_module_args(argv: list[str]) -> list[str]:
+    if "--run-module" in argv[1:]:
+        return argv
+    if len(argv) >= 3 and argv[1] == "-m":
+        return [argv[0], "--run-module", argv[2], *argv[3:]]
+    return argv
 
 
 def _available_port(host: str) -> int:
@@ -24,7 +41,7 @@ def _available_port(host: str) -> int:
 
 
 def _run_server(host: str, port: int) -> None:
-    bobsim_app.run(host, port)
+    _bobsim_app().run(host, port)
 
 
 def _has_module(module: str) -> bool:
@@ -61,6 +78,13 @@ def _open_browser_and_wait(url: str, server_thread: threading.Thread) -> None:
 
 
 def main() -> None:
+    multiprocessing.freeze_support()
+
+    sys.argv = _normalize_module_args(sys.argv)
+    if "--run-module" in sys.argv[1:]:
+        _bobsim_app().main()
+        return
+
     port = _available_port(HOST)
     url = f"http://{HOST}:{port}"
     server_thread = threading.Thread(target=_run_server, args=(HOST, port), daemon=True)
