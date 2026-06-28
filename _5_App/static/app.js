@@ -603,6 +603,20 @@ function boblibInitialized() {
   return Boolean(state.status?.repo?.boblib_package?.exists);
 }
 
+function externalToolchainAvailable() {
+  return Boolean(state.status?.external_toolchain?.available);
+}
+
+function workflowAvailable(workflow) {
+  return Boolean(workflow) && workflow.available !== false;
+}
+
+function workflowUnavailableMessage(workflow) {
+  return workflow?.unavailable_reason
+    || state.status?.external_toolchain?.reason
+    || "Simulation runner unavailable.";
+}
+
 function vehicleDefinitionCurrent() {
   return Boolean(state.vehiclePayload) && !state.dirtyVehicle && state.vehicleDefinitionState === "current";
 }
@@ -616,7 +630,11 @@ function canWriteMbd() {
 }
 
 function canUseStandardSim() {
-  return vehicleDefinitionCurrent() && activeVehicleConfigReady();
+  return externalToolchainAvailable() && vehicleDefinitionCurrent() && activeVehicleConfigReady();
+}
+
+function canRunStandardWorkflow(workflow = selectedWorkflow()) {
+  return canUseStandardSim() && workflowAvailable(workflow);
 }
 
 function canSaveActiveResults() {
@@ -962,7 +980,14 @@ function applySetupPaneWidth(width = state.setupPaneWidth, min, max) {
 function simulationLockedMessage() {
   if (!activeVehicleConfigReady()) return "Save this vehicle config before viewing Simulation.";
   if (!vehicleDefinitionCurrent()) return "Write the saved vehicle definition to MBD before viewing Simulation.";
+  if (!externalToolchainAvailable()) return state.status?.external_toolchain?.reason || "Simulation runner unavailable.";
   return "Simulation is available.";
+}
+
+function standardWorkflowLockedMessage(workflow = selectedWorkflow()) {
+  if (!canUseStandardSim()) return simulationLockedMessage();
+  if (!workflowAvailable(workflow)) return workflowUnavailableMessage(workflow);
+  return "";
 }
 
 function geometryPlotHeightBounds() {
@@ -1045,9 +1070,10 @@ function renderRailActions() {
     primary.disabled = !canSaveActiveResults();
     primary.title = saveActiveResultsDisabledReason();
   } else {
+    const workflow = selectedWorkflow();
     primary.textContent = "Configure Simulation";
-    primary.disabled = !selectedWorkflow() || !canUseStandardSim();
-    primary.title = canUseStandardSim() ? "" : simulationLockedMessage();
+    primary.disabled = !canRunStandardWorkflow(workflow);
+    primary.title = canRunStandardWorkflow(workflow) ? "" : standardWorkflowLockedMessage(workflow);
   }
   secondary.textContent = "Back to Vehicle";
   secondary.disabled = false;
@@ -3449,7 +3475,8 @@ async function selectStandardWorkflow(workflowId) {
 }
 
 async function configureSimulationWorkflow(workflowId) {
-  if (!workflowId || !canUseStandardSim()) return;
+  const workflow = standardWorkflows().find((item) => item.id === workflowId);
+  if (!workflow || !canRunStandardWorkflow(workflow)) return;
   if (workflowId !== state.selectedWorkflowId) {
     await selectStandardWorkflow(workflowId);
   }
@@ -3503,8 +3530,10 @@ function workflowCard(workflow) {
   const meta = simWorkflowMeta(workflow);
   const canReview = workflowReviewAvailable(workflow);
   const reviewTitle = canReview ? "Open generated outputs" : "Run this simulation before reviewing outputs";
+  const canConfigure = workflowAvailable(workflow);
+  const configureTitle = canConfigure ? "Configure simulation" : workflowUnavailableMessage(workflow);
   return `
-    <article class="workflow-card simulation-card ${workflow.id === state.selectedWorkflowId ? "active" : ""}" data-workflow="${workflow.id}">
+    <article class="workflow-card simulation-card ${workflow.id === state.selectedWorkflowId ? "active" : ""} ${canConfigure ? "" : "disabled"}" data-workflow="${workflow.id}">
       <div class="simulation-card-figure">
         ${simFigureHtml(workflow)}
       </div>
@@ -3526,9 +3555,10 @@ function workflowCard(workflow) {
         </div>
         <div class="card-actions">
           <span class="mini-pill ${workflow.config?.exists ? "ok" : "missing"}">Config</span>
+          ${canConfigure ? "" : `<span class="mini-pill missing">Unavailable</span>`}
           <span class="mini-pill ${outputCount ? "ok" : "missing"}">${outputCount}/${workflow.outputs.length} outputs</span>
           <button class="ghost-button simulation-review-button" type="button" data-review-workflow="${escapeHtml(workflow.id)}"${canReview ? "" : " disabled"} title="${escapeHtml(reviewTitle)}">Review</button>
-          <button class="run-button" type="button" data-configure-workflow="${escapeHtml(workflow.id)}">Configure</button>
+          <button class="run-button" type="button" data-configure-workflow="${escapeHtml(workflow.id)}"${canConfigure ? "" : " disabled"} title="${escapeHtml(configureTitle)}">Configure</button>
         </div>
       </div>
     </article>
@@ -4549,8 +4579,9 @@ function renderStudyCatalog() {
 function studyWorkflowCard(workflow) {
   const outputCount = workflow.outputs.filter((output) => output.exists).length;
   const group = studyGroupMeta(workflow.group);
+  const canRun = workflowAvailable(workflow);
   return `
-    <article class="workflow-card study-card ${workflow.id === state.selectedStudyWorkflowId ? "active" : ""}" data-study-workflow="${workflow.id}">
+    <article class="workflow-card study-card ${workflow.id === state.selectedStudyWorkflowId ? "active" : ""} ${canRun ? "" : "disabled"}" data-study-workflow="${workflow.id}">
       <div class="card-head">
         <div class="card-title">${escapeHtml(workflow.label)}</div>
         <span class="mini-pill">${escapeHtml(group.label)}</span>
@@ -4558,6 +4589,7 @@ function studyWorkflowCard(workflow) {
       <div class="card-meta">${escapeHtml(studyDescription(workflow))}</div>
       <div class="signal-row">
         <span class="mini-pill ${workflow.config?.exists ? "ok" : "missing"}">Config</span>
+        ${canRun ? "" : `<span class="mini-pill missing">Unavailable</span>`}
         <span class="mini-pill ${outputCount ? "ok" : "missing"}">${outputCount}/${workflow.outputs.length} outputs</span>
       </div>
     </article>
@@ -4701,11 +4733,13 @@ function renderStudyJobs() {
   const runButton = document.getElementById("run-study-btn");
   const workflow = selectedStudyWorkflow();
   if (runButton) {
-    runButton.disabled = !workflow;
+    const canRun = workflowAvailable(workflow);
+    runButton.disabled = !canRun;
     const runVerb = workflow?.actions.length > 1 ? "Build + Run" : "Run";
-    runButton.textContent = workflow
+    runButton.textContent = canRun
       ? `${state.dirtyStudyConfig ? "Apply + " : ""}${runVerb} ${workflow.label}`
-      : "No Study";
+      : "Study locked";
+    runButton.title = canRun ? "" : workflowUnavailableMessage(workflow);
   }
   if (!list) return;
   if (!jobs.length) {
@@ -4871,14 +4905,15 @@ function renderJobs() {
   const list = document.getElementById("job-list");
   const runButton = document.getElementById("run-workflow-btn");
   const workflow = selectedWorkflow();
-  runButton.disabled = !workflow || !canUseStandardSim();
+  const canRun = canRunStandardWorkflow(workflow);
+  runButton.disabled = !canRun;
   const runVerb = workflow?.actions.length > 1 ? "Build + Run" : "Run";
-  runButton.textContent = !canUseStandardSim()
+  runButton.textContent = !canRun
     ? "Simulation locked"
     : workflow
     ? `${state.dirtySimConfig ? "Apply + " : ""}${runVerb} ${workflow.label}`
     : "No Workflow";
-  runButton.title = canUseStandardSim() ? "" : simulationLockedMessage();
+  runButton.title = canRun ? "" : standardWorkflowLockedMessage(workflow);
   if (!jobs.length) {
     list.innerHTML = `<div class="empty-state">No jobs yet.</div>`;
     document.getElementById("job-log").textContent = "";
@@ -4920,7 +4955,7 @@ async function loadJobLog(targetId = "job-log") {
 async function startSelectedWorkflow() {
   const workflow = selectedWorkflow();
   if (!workflow) return;
-  if (!canUseStandardSim()) {
+  if (!canRunStandardWorkflow(workflow)) {
     state.view = "setup";
     render();
     return;
@@ -4929,32 +4964,54 @@ async function startSelectedWorkflow() {
     const applied = await applySimConfigEdits();
     if (!applied) return;
   }
-  const job = await api(`/api/workflows/${workflow.id}/run`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
-  state.selectedJobId = job.id;
-  state.activeSimTab = "jobs";
-  state.simModalOpen = true;
-  state.status = await api("/api/status");
-  renderStandard();
+  try {
+    const job = await api(`/api/workflows/${workflow.id}/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    state.selectedJobId = job.id;
+    state.activeSimTab = "jobs";
+    state.simModalOpen = true;
+    state.status = await api("/api/status");
+    renderStandard();
+  } catch (error) {
+    state.activeSimTab = "jobs";
+    state.simModalOpen = true;
+    state.status = await api("/api/status").catch(() => state.status);
+    renderStandard();
+    const log = document.getElementById("job-log");
+    if (log) log.textContent = error.message;
+  }
 }
 
 async function startSelectedStudyWorkflow() {
   const workflow = selectedStudyWorkflow();
   if (!workflow) return;
+  if (!workflowAvailable(workflow)) {
+    const log = document.getElementById("study-job-log");
+    if (log) log.textContent = workflowUnavailableMessage(workflow);
+    return;
+  }
   if (state.dirtyStudyConfig) {
     const applied = await applyStudyConfigEdits();
     if (!applied) return;
   }
-  const job = await api(`/api/workflows/${workflow.id}/run`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
-  state.selectedJobId = job.id;
-  state.activeStudyTab = "jobs";
-  state.status = await api("/api/status");
-  renderStudies();
+  try {
+    const job = await api(`/api/workflows/${workflow.id}/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    state.selectedJobId = job.id;
+    state.activeStudyTab = "jobs";
+    state.status = await api("/api/status");
+    renderStudies();
+  } catch (error) {
+    state.activeStudyTab = "jobs";
+    state.status = await api("/api/status").catch(() => state.status);
+    renderStudies();
+    const log = document.getElementById("study-job-log");
+    if (log) log.textContent = error.message;
+  }
 }
 
 function setView(view) {

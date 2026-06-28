@@ -43,6 +43,38 @@ def test_app_workflow_actions_are_allowlisted() -> None:
         assert not Path(action.argv[0]).is_absolute() or action.argv[0] == app.PYTHON
 
 
+def test_frozen_desktop_disables_external_toolchain_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app, "FROZEN_APP", True)
+    monkeypatch.delenv(app.EXTERNAL_TOOLCHAIN_ENV, raising=False)
+    monkeypatch.setattr(app.shutil, "which", lambda name: "/usr/bin/omc" if name == "omc" else None)
+
+    payload = app.external_toolchain_payload()
+    assert payload["enabled"] is False
+    assert payload["available"] is False
+    assert payload["frozen"] is True
+    assert app.action_available(app.ACTION_SPECS["build-vehicle"]) is False
+
+    workflow = next(workflow for workflow in app.WORKFLOWS if workflow.id == "ramp-steer")
+    workflow_json = app.workflow_payload(workflow)
+    assert workflow_json["available"] is False
+    assert "disabled in the desktop build" in workflow_json["unavailable_reason"]
+
+    with pytest.raises(RuntimeError, match="disabled in the desktop build"):
+        app.start_workflow("ramp-steer")
+
+
+def test_frozen_desktop_can_opt_into_external_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app, "FROZEN_APP", True)
+    monkeypatch.setenv(app.EXTERNAL_TOOLCHAIN_ENV, "1")
+    monkeypatch.setattr(app.shutil, "which", lambda name: "/usr/bin/omc" if name == "omc" else None)
+
+    assert app.external_toolchain_available() is True
+    assert app.action_available(app.ACTION_SPECS["build-vehicle"]) is True
+
+    workflow = next(workflow for workflow in app.WORKFLOWS if workflow.id == "ramp-steer")
+    assert app.workflow_payload(workflow)["available"] is True
+
+
 def test_app_can_read_repo_configs() -> None:
     payload = app.read_text_payload("_3_StandardSim/RampSteerEval/ramp_steer_eval_config.yml")
 
@@ -162,6 +194,16 @@ def test_frontend_powertrain_subsystem_tabs_wrap_before_clipping() -> None:
     assert ".workflow-guide {\n  position: static;" in styles
 
 
+def test_frontend_gates_workflow_runner_on_toolchain_availability() -> None:
+    app_js = (app.ROOT / "_5_App/static/app.js").read_text(encoding="utf-8")
+
+    assert "function externalToolchainAvailable" in app_js
+    assert "function workflowAvailable" in app_js
+    assert "function canRunStandardWorkflow" in app_js
+    assert "return externalToolchainAvailable() && vehicleDefinitionCurrent()" in app_js
+    assert "startSelectedStudyWorkflow" in app_js
+
+
 def test_app_can_patch_powertrain_defaults_into_vehicle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     active = tmp_path / "vehicle.yml"
     active.write_text(
@@ -219,6 +261,7 @@ def test_app_archives_and_restores_matching_modelica_builds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(app, "ROOT", tmp_path)
+    monkeypatch.setattr(app.shutil, "which", lambda name: "/usr/bin/omc" if name == "omc" else None)
     (tmp_path / "vehicle.yml").write_text("vehicle:\n  name: CacheCar\n", encoding="utf-8")
     script_path = tmp_path / "_3_StandardSim/build_vehicle_sim.mos"
     script_path.parent.mkdir(parents=True)

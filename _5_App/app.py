@@ -37,6 +37,12 @@ from _5_App.modelica_generator import (
 
 APP_NAME = "BobDyn"
 PACKAGE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])).resolve()
+FROZEN_APP = bool(getattr(sys, "frozen", False))
+EXTERNAL_TOOLCHAIN_ENV = "BOBDYN_ENABLE_EXTERNAL_TOOLS"
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _default_runtime_root() -> Path:
@@ -173,6 +179,7 @@ class ActionSpec:
     label: str
     argv: tuple[str, ...]
     env: dict[str, str] = dataclass_field(default_factory=dict)
+    requires_external_toolchain: bool = False
 
 
 @dataclass(frozen=True)
@@ -222,7 +229,7 @@ class ConfigSpec:
 
 
 PYTHON = sys.executable
-PYTHON_MODULE_ARG = "--run-module" if getattr(sys, "frozen", False) else "-m"
+PYTHON_MODULE_ARG = "--run-module" if FROZEN_APP else "-m"
 
 
 def _python_module_argv(module: str) -> tuple[str, ...]:
@@ -233,58 +240,69 @@ ACTION_SPECS: dict[str, ActionSpec] = {
         id="build-vehicle",
         label="Build VehicleSim",
         argv=("omc", "_3_StandardSim/build_vehicle_sim.mos"),
+        requires_external_toolchain=True,
     ),
     "build-four-post": ActionSpec(
         id="build-four-post",
         label="Build FourPostSim",
         argv=("omc", "_3_StandardSim/build_four_post_sim.mos"),
+        requires_external_toolchain=True,
     ),
     "run-ramp-steer": ActionSpec(
         id="run-ramp-steer",
         label="Run RampSteerEval",
         argv=_python_module_argv("_3_StandardSim.RampSteerEval.ramp_steer_eval_sim"),
+        requires_external_toolchain=True,
     ),
     "run-steady-state": ActionSpec(
         id="run-steady-state",
         label="Run SteadyStateEval",
         argv=_python_module_argv("_3_StandardSim.SteadyStateEval.steady_state_eval_sim"),
+        requires_external_toolchain=True,
     ),
     "run-transient": ActionSpec(
         id="run-transient",
         label="Run TransientEval",
         argv=_python_module_argv("_3_StandardSim.TransientEval.transient_eval_sim"),
+        requires_external_toolchain=True,
     ),
     "run-four-post": ActionSpec(
         id="run-four-post",
         label="Run FourPostEval",
         argv=_python_module_argv("_3_StandardSim.FourPostEval.four_post_eval_sim"),
+        requires_external_toolchain=True,
     ),
     "run-ggv": ActionSpec(
         id="run-ggv",
         label="Run GGV",
         argv=_python_module_argv("_2_EnvelopeSim.GGV.ggv_generation"),
+        requires_external_toolchain=True,
     ),
     "run-ymd": ActionSpec(
         id="run-ymd",
         label="Run YMD",
         argv=_python_module_argv("_2_EnvelopeSim.YMD.ymd_generation"),
+        requires_external_toolchain=True,
     ),
     "run-review": ActionSpec(
         id="run-review",
         label="Run VehicleReview",
         argv=_python_module_argv("_2_EnvelopeSim.VehicleReview.vehicle_review_sim"),
+        requires_external_toolchain=True,
     ),
     "run-opt-standard": ActionSpec(
         id="run-opt-standard",
         label="Run StandardSens",
         argv=_python_module_argv("StandardSens.pre_screen_sensitivities"),
         env={"PYTHONPATH": f"{ROOT / '_4_OptSim'}:{ROOT}"},
+        requires_external_toolchain=True,
     ),
     "run-opt-envelope": ActionSpec(
         id="run-opt-envelope",
         label="Run EnvelopeSens",
         argv=_python_module_argv("EnvelopeSens.sensitivities"),
         env={"PYTHONPATH": f"{ROOT / '_4_OptSim'}:{ROOT}"},
+        requires_external_toolchain=True,
     ),
 }
 
@@ -408,6 +426,51 @@ WORKFLOWS: tuple[WorkflowSpec, ...] = (
         outputs=(),
     ),
 )
+
+
+def external_toolchain_enabled() -> bool:
+    return _env_truthy(EXTERNAL_TOOLCHAIN_ENV) or not FROZEN_APP
+
+
+def external_toolchain_available() -> bool:
+    return external_toolchain_enabled() and shutil.which("omc") is not None
+
+
+def external_toolchain_payload() -> dict[str, Any]:
+    enabled = external_toolchain_enabled()
+    omc_path = shutil.which("omc")
+    available = enabled and omc_path is not None
+    if available:
+        reason = "OpenModelica toolchain available."
+    elif FROZEN_APP and not enabled:
+        reason = (
+            "Simulation runner is disabled in the desktop build. "
+            f"Set {EXTERNAL_TOOLCHAIN_ENV}=1 to use an external OpenModelica install."
+        )
+    else:
+        reason = "OpenModelica `omc` was not found on PATH."
+    return {
+        "available": available,
+        "enabled": enabled,
+        "frozen": FROZEN_APP,
+        "omc": omc_path,
+        "enable_env": EXTERNAL_TOOLCHAIN_ENV,
+        "reason": reason,
+    }
+
+
+def action_available(action: ActionSpec) -> bool:
+    return not action.requires_external_toolchain or external_toolchain_available()
+
+
+def unavailable_action_reason(action: ActionSpec) -> str:
+    if action_available(action):
+        return ""
+    return external_toolchain_payload()["reason"]
+
+
+def workflow_available(workflow: WorkflowSpec) -> bool:
+    return all(action_available(ACTION_SPECS[action_id]) for action_id in workflow.actions)
 
 
 class JobStore:
@@ -2404,6 +2467,7 @@ def apply_vehicle_template(template_id: str) -> dict[str, Any]:
 
 def workflow_payload(workflow: WorkflowSpec) -> dict[str, Any]:
     specs = config_specs()
+    available = workflow_available(workflow)
     actions = [ACTION_SPECS[action_id] for action_id in workflow.actions]
     outputs = [
         {
@@ -2417,9 +2481,20 @@ def workflow_payload(workflow: WorkflowSpec) -> dict[str, Any]:
         "id": workflow.id,
         "group": workflow.group,
         "label": workflow.label,
+        "available": available,
+        "unavailable_reason": "" if available else external_toolchain_payload()["reason"],
         "config": _path_payload(workflow.config) if workflow.config else None,
         "config_id": workflow.id if workflow.id in specs else None,
-        "actions": [{"id": action.id, "label": action.label, "argv": list(action.argv)} for action in actions],
+        "actions": [
+            {
+                "id": action.id,
+                "label": action.label,
+                "argv": list(action.argv),
+                "available": action_available(action),
+                "unavailable_reason": unavailable_action_reason(action),
+            }
+            for action in actions
+        ],
         "outputs": outputs,
     }
 
@@ -2507,6 +2582,16 @@ def _modelica_build_payload(
     target: BuildTargetSpec | None = None,
 ) -> dict[str, Any]:
     path_payload = _path_payload(raw_path)
+    if target and not action_available(ACTION_SPECS[target.action_id]):
+        return {
+            **path_payload,
+            "state": "disabled",
+            "label": "Unavailable",
+            "signature": None,
+            "current_signature": None,
+            "archive": None,
+            "unavailable_reason": unavailable_action_reason(ACTION_SPECS[target.action_id]),
+        }
     path = _safe_repo_path(raw_path)
     exists = path.is_file()
     written = bool(stack and stack.get("written_to_boblib"))
@@ -2564,11 +2649,20 @@ def status_payload() -> dict[str, Any]:
     return {
         "repo": {
             "root": str(ROOT),
+            "package_root": str(PACKAGE_ROOT),
+            "frozen": FROZEN_APP,
             "boblib_package": _path_payload("_0_Utils/external/BobLib/BobLib/package.mo"),
             "vehicle_exe": _path_payload(vehicle_exe),
             "four_post_exe": _path_payload(four_post_exe),
             "vehicle_yml": _path_payload("vehicle.yml"),
         },
+        "runtime": {
+            "root": str(ROOT),
+            "package_root": str(PACKAGE_ROOT),
+            "frozen": FROZEN_APP,
+            "home_env": "BOBDYN_HOME",
+        },
+        "external_toolchain": external_toolchain_payload(),
         "modelica": modelica,
         "vehicle_workspace": vehicle_workspace_payload(stack=modelica),
         "workflows": [workflow_payload(workflow) for workflow in WORKFLOWS],
@@ -3428,6 +3522,10 @@ def _run_subprocess_action(action: ActionSpec, job_id: str) -> int:
 
 
 def _run_action_process(action: ActionSpec, job_id: str) -> int:
+    if not action_available(action):
+        reason = unavailable_action_reason(action)
+        JOBS.append_log(job_id, f"{action.label} unavailable: {reason}\n")
+        return 2
     target = MODELICA_BUILD_TARGETS_BY_ACTION.get(action.id)
     if target:
         return _run_modelica_build_action(action, target, job_id)
@@ -3457,6 +3555,8 @@ def start_job(action_id: str) -> dict[str, Any]:
     if action_id not in ACTION_SPECS:
         raise KeyError(action_id)
     action = ACTION_SPECS[action_id]
+    if not action_available(action):
+        raise RuntimeError(unavailable_action_reason(action))
     job = JOBS.create(action.id, action.label, list(action.argv))
     thread = threading.Thread(target=run_actions_job, args=((action,), job["id"]), daemon=True)
     thread.start()
@@ -3469,6 +3569,9 @@ def start_workflow(workflow_id: str) -> dict[str, Any]:
         raise KeyError(workflow_id)
     workflow = workflows[workflow_id]
     actions = tuple(ACTION_SPECS[action_id] for action_id in workflow.actions)
+    unavailable = [action for action in actions if not action_available(action)]
+    if unavailable:
+        raise RuntimeError(unavailable_action_reason(unavailable[0]))
     label = f"Run {workflow.label}"
     argv = [action.label for action in actions]
     job = JOBS.create(f"workflow:{workflow.id}", label, argv)
