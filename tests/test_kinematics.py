@@ -577,6 +577,37 @@ def test_four_post_summary_filters_implausible_samples(
     assert not np.any(np.abs(series["front_load_transfer_vs_roll"]) > four_post_eval.FOUR_POST_SIGNAL_ABS_LIMIT)
 
 
+def test_four_post_anti_roll_uses_commanded_force_when_measured_fy_is_bad(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vehicle = _four_post_unit_vehicle()
+    monkeypatch.setattr(four_post_eval, "_load_active_vehicle_yaml", lambda: vehicle)
+    heave_sweep = np.linspace(
+        -0.03,
+        0.03,
+        four_post_eval.FOUR_POST_HEAVE_POSE_COUNT,
+    )
+    roll_sweep_deg = np.linspace(
+        -1.25,
+        1.25,
+        four_post_eval.FOUR_POST_ROLL_POSE_COUNT,
+    )
+    result = _four_post_result_from_kinematics(vehicle, heave_sweep, roll_sweep_deg)
+    first_roll_jack_time = _jack_times(four_post_eval.FOUR_POST_ROLL_START_S, 1)[0]
+    roll_jack_index = int(np.argmin(np.abs(result["time"] - first_roll_jack_time)))
+    result["frKnC.fy"][roll_jack_index] = 1e-12
+    result["frKnC.jackingForce"][roll_jack_index] = -50.0
+
+    summary, series = four_post_eval.FourPostEvalSim(
+        _four_post_unit_config(tmp_path)
+    ).summarize(result)
+
+    assert np.isfinite(summary["avg_anti_roll_front_pct"])
+    assert len(series["fr_anti_vs_roll"]) == four_post_eval.FOUR_POST_ROLL_POSE_COUNT
+    assert not np.any(np.abs(series["fr_anti_vs_roll"]) > four_post_eval.FOUR_POST_PERCENT_ABS_LIMIT)
+
+
 def test_kinematic_heave_gains_match_four_post_eval_metrics() -> None:
     metrics_path = ROOT / "_3_StandardSim/results/four_post_eval_report_metrics.csv"
     if not metrics_path.is_file():

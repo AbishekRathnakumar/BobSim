@@ -29,6 +29,7 @@ FOUR_POST_ROLL_START_S = FOUR_POST_HEAVE_END_S + 1.0
 FOUR_POST_ROLL_POSE_COUNT = 11
 FOUR_POST_STOP_TIME_S = FOUR_POST_ROLL_START_S + FOUR_POST_POSE_STEP_S * FOUR_POST_ROLL_POSE_COUNT
 FOUR_POST_SAMPLE_WINDOW_S = 0.5
+FOUR_POST_FORCE_SAMPLE_FRACTION = 0.5
 FOUR_POST_SIGNAL_ABS_LIMIT = 1e9
 FOUR_POST_RATIO_ABS_LIMIT = 1e4
 FOUR_POST_FRACTION_ABS_LIMIT = 10.0
@@ -274,6 +275,31 @@ def _safe_divide_series(
     out[mask] = numerator_arr[mask] / denominator_arr[mask]
     out[~_finite_abs_mask(out, max_abs)] = np.nan
     return out
+
+
+def _force_denominator_series(measured_force: Any, fallback_abs_force: float) -> np.ndarray:
+    measured = _plausible_array(measured_force)
+    fallback_abs_force = abs(float(fallback_abs_force))
+    fallback = np.full(measured.shape, fallback_abs_force, dtype=float)
+    if fallback_abs_force <= 0.0:
+        return measured
+
+    min_force = max(1e-3, 0.05 * fallback_abs_force)
+    max_force = 5.0 * fallback_abs_force
+    measured_ok = _finite_abs_mask(measured) & (np.abs(measured) >= min_force) & (np.abs(measured) <= max_force)
+    return np.where(measured_ok, measured, fallback)
+
+
+def _sort_xy(x: Any, y: Any) -> tuple[np.ndarray, np.ndarray]:
+    x_arr = np.asarray(x, dtype=float).reshape(-1)
+    y_arr = np.asarray(y, dtype=float).reshape(-1)
+    size = min(x_arr.size, y_arr.size)
+    if size <= 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+    x_arr = x_arr[:size]
+    y_arr = y_arr[:size]
+    idx = np.argsort(x_arr)
+    return x_arr[idx], y_arr[idx]
 
 
 def _configured_suspension_setup(config: dict[str, Any]) -> dict[str, Any]:
@@ -1183,6 +1209,12 @@ class FourPostEvalSim:
         rr_roll_fy = sample_at_times(rr_fy, roll_jack_times)
         fr_heave_fx = sample_at_times(fr_fx, heave_jack_times)
         rr_heave_fx = sample_at_times(rr_fx, heave_jack_times)
+        procedure_cfg = _as_mapping(self.config.get("procedure"), name="procedure")
+        roll_force_denominator_n = (
+            FOUR_POST_FORCE_SAMPLE_FRACTION * abs(float(procedure_cfg.get("forceMagnitude", 1000.0)))
+        )
+        fr_roll_force_denominator = _force_denominator_series(fr_roll_fy, roll_force_denominator_n)
+        rr_roll_force_denominator = _force_denominator_series(rr_roll_fy, roll_force_denominator_n)
 
         fr_coeff_heave = _safe_divide_series(
             fr_heave_jack_y,
@@ -1198,13 +1230,13 @@ class FourPostEvalSim:
         )
         fr_coeff_roll = _safe_divide_series(
             fr_roll_jack_y,
-            fr_roll_fy,
+            fr_roll_force_denominator,
             min_denominator_abs=1e-3,
             max_abs=FOUR_POST_RATIO_ABS_LIMIT,
         )
         rr_coeff_roll = _safe_divide_series(
             rr_roll_jack_y,
-            rr_roll_fy,
+            rr_roll_force_denominator,
             min_denominator_abs=1e-3,
             max_abs=FOUR_POST_RATIO_ABS_LIMIT,
         )
@@ -1247,6 +1279,8 @@ class FourPostEvalSim:
         rr_roll_x = rr_roll_jack_x[mask_rr]
         fr_anti_roll = fr_anti_roll[mask_fr]
         rr_anti_roll = rr_anti_roll[mask_rr]
+        fr_roll_x, fr_anti_roll = _sort_xy(fr_roll_x, fr_anti_roll)
+        rr_roll_x, rr_anti_roll = _sort_xy(rr_roll_x, rr_anti_roll)
 
         def compute_motion_ratio_series(
             spring_signal: np.ndarray,
