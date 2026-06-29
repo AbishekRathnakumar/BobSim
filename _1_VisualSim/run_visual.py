@@ -705,4 +705,4 @@ writer.close()
 if show_signals and fig is not None:
     plt.close(fig)
 
-print(f"[bobvis] ✔ MP4 saved → {mp4_path}")
+print(f"[bobvis] MP4 saved: {mp4_path}")

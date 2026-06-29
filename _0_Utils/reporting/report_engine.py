@@ -10,14 +10,14 @@ class ReportEngine:
         self.config = config
 
     def build(self, result):
-        print("📄 ReportEngine.build() called")
+        print("[report] ReportEngine.build() called")
 
         report_cfg = self.config.get("report", {})
 
-        print("📄 report config:", report_cfg)
+        print("[report] report config:", report_cfg)
 
         if not report_cfg.get("enabled", True):
-            print("🚫 Report disabled")
+            print("[report] Report disabled")
             return
 
         output_path = Path(
@@ -27,7 +27,7 @@ class ReportEngine:
             )
         )
 
-        print("📄 Writing report to:", output_path.resolve())
+        print("[report] Writing report to:", output_path.resolve())
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.unlink(missing_ok=True)
@@ -55,14 +55,14 @@ class ReportEngine:
                         page_title = f"{standard} Summary"
                         if velocity is not None:
                             page_title = f"{page_title} {velocity:.1f} m/s"
-                        print(f"📄 Rendering summary page: {page_title}")
+                        print(f"[report] Rendering summary page: {page_title}")
                         add_summary_page(
                             pdf,
                             summary,
                             title=page_title,
                         )
                 else:
-                    print(f"📄 Rendering summary page: {standard} Summary")
+                    print(f"[report] Rendering summary page: {standard} Summary")
                     add_summary_page(
                         pdf,
                         result["summary"],
@@ -82,11 +82,11 @@ class ReportEngine:
                         page_title = "TransientEval Metrics Summary"
                         if velocity is not None:
                             page_title = f"{page_title} {velocity:.1f} m/s"
-                        print(f"📄 Rendering summary page: {page_title}")
+                        print(f"[report] Rendering summary page: {page_title}")
                         add_transient_eval_step_page(pdf, summary)
                         add_transient_eval_frequency_page(pdf, summary)
                 else:
-                    print("📄 Rendering summary page: TransientEval Metrics Summary")
+                    print("[report] Rendering summary page: TransientEval Metrics Summary")
                     add_transient_eval_step_page(pdf, result["summary"])
                     add_transient_eval_frequency_page(pdf, result["summary"])
 
@@ -108,7 +108,7 @@ class ReportEngine:
                 raise ValueError(f"Unknown standard: {standard}")
 
             if "plots" in self.config:
-                print("📄 Rendering plot pages")
+                print("[report] Rendering plot pages")
                 PlotEngine(self.config).run(result, pdf)
 
-        print("✅ Report written")
+        print("[report] Report written")

@@ -1611,7 +1611,7 @@ class TransientEvalSim:
 
         metrics_csv_path = self.write_metrics_csv(metrics)
 
-        print(f"📊 TransientEval metrics CSV written: {metrics_csv_path}")
+        print(f"TransientEval metrics CSV written: {metrics_csv_path}")
 
         return {
             "summary": summary,

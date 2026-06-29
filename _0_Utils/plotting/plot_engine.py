@@ -29,10 +29,10 @@ class PlotEngine:
 
         for plot_name, p_cfg in self.config.get("plots", {}).items():
             if raw_plots_only and not plot_name.startswith("raw_"):
-                print(f"📈 Skipping non-raw plot page: {plot_name}")
+                print(f"[plot] Skipping non-raw plot page: {plot_name}")
                 continue
 
-            print(f"📈 Rendering plot page: {plot_name}")
+            print(f"[plot] Rendering plot page: {plot_name}")
 
             if p_cfg.get("skip_if_missing"):
                 subplots = p_cfg.get("subplots")
@@ -55,7 +55,7 @@ class PlotEngine:
                         break
 
                 if not has_data:
-                    print(f"📈 Skipping optional plot page: {plot_name}")
+                    print(f"[plot] Skipping optional plot page: {plot_name}")
                     continue
 
             layout_name = p_cfg.get("layout", "single")

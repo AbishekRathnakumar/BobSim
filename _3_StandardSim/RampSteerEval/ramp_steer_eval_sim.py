@@ -1735,7 +1735,7 @@ class RampSteerEvalSim:
 
         metrics_csv_path = self.write_metrics_csv(metrics)
 
-        print(f"📊 RampSteerEval metrics CSV written: {metrics_csv_path}")
+        print(f"RampSteerEval metrics CSV written: {metrics_csv_path}")
 
         velocity_summary_series = {
             "velocity_summary_mps": np.asarray(

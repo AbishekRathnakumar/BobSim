@@ -182,6 +182,7 @@ OPENMODELICA_LIBRARY_ENV_KEYS = (
 OPENMODELICA_REQUIRED_LIBRARIES = ("Modelica", "VehicleInterfaces")
 OPENMODELICA_VERIFY_TIMEOUT_S = 12
 OPENMODELICA_VERIFY_CACHE: dict[str, dict[str, Any]] = {}
+PYTHON_SUBPROCESS_ENCODING = "utf-8:replace"
 
 
 @dataclass(frozen=True)
@@ -4240,10 +4241,16 @@ def _apply_openmodelica_env(env: dict[str, str]) -> None:
     )
 
 
+def _apply_python_stdio_env(env: dict[str, str]) -> None:
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = PYTHON_SUBPROCESS_ENCODING
+
+
 def _run_subprocess_action(action: ActionSpec, job_id: str) -> int:
     env = os.environ.copy()
     env.update(action.env)
     env.setdefault("PYTHONUNBUFFERED", "1")
+    _apply_python_stdio_env(env)
     if action.requires_external_toolchain:
         _apply_openmodelica_env(env)
     argv = _action_argv(action)
@@ -4255,6 +4262,8 @@ def _run_subprocess_action(action: ActionSpec, job_id: str) -> int:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
     ) as process:
         assert process.stdout is not None

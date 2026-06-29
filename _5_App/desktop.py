@@ -14,7 +14,24 @@ import webbrowser
 
 APP_TITLE = "BobSim"
 HOST = "127.0.0.1"
+PYTHON_STDIO_ENCODING = "utf-8:replace"
 bobsim_app = None
+
+
+def _configure_stdio() -> None:
+    os.environ["PYTHONUTF8"] = "1"
+    os.environ["PYTHONIOENCODING"] = PYTHON_STDIO_ENCODING
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            try:
+                reconfigure(errors="replace")
+            except (OSError, ValueError):
+                pass
 
 
 def _bobsim_app():
@@ -78,6 +95,7 @@ def _open_browser_and_wait(url: str, server_thread: threading.Thread) -> None:
 
 
 def main() -> None:
+    _configure_stdio()
     multiprocessing.freeze_support()
 
     sys.argv = _normalize_module_args(sys.argv)

@@ -91,6 +91,29 @@ def test_desktop_forwards_python_module_invocations_without_opening_window(
     assert desktop.sys.argv == normalized
 
 
+def test_desktop_stdio_replaces_unencodable_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeStream:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, str]] = []
+
+        def reconfigure(self, **kwargs: str) -> None:
+            self.calls.append(kwargs)
+
+    stdout = FakeStream()
+    stderr = FakeStream()
+    monkeypatch.delenv("PYTHONUTF8", raising=False)
+    monkeypatch.delenv("PYTHONIOENCODING", raising=False)
+    monkeypatch.setattr(desktop.sys, "stdout", stdout)
+    monkeypatch.setattr(desktop.sys, "stderr", stderr)
+
+    desktop._configure_stdio()
+
+    assert desktop.os.environ["PYTHONUTF8"] == "1"
+    assert desktop.os.environ["PYTHONIOENCODING"] == "utf-8:replace"
+    assert stdout.calls == [{"encoding": "utf-8", "errors": "replace"}]
+    assert stderr.calls == [{"encoding": "utf-8", "errors": "replace"}]
+
+
 def test_desktop_reports_missing_openmodelica_without_running_builds(monkeypatch: pytest.MonkeyPatch) -> None:
     clear_openmodelica_settings(monkeypatch)
     monkeypatch.setattr(app, "FROZEN_APP", True)
@@ -408,6 +431,46 @@ def test_modelica_build_action_creates_build_directory_before_omc(
 
     assert returncode == 0
     assert f"Ensured {target.label} build directory" in app.JOBS.get(job["id"])["log"]
+
+
+def test_subprocess_action_uses_utf8_replacement_stdio(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        stdout = iter(["\U0001f4ca ok\n"])
+
+        def __enter__(self) -> "FakeProcess":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def wait(self) -> int:
+            return 0
+
+    def fake_popen(argv: tuple[str, ...], **kwargs: object) -> FakeProcess:
+        captured["argv"] = argv
+        captured.update(kwargs)
+        return FakeProcess()
+
+    monkeypatch.setattr(app, "ROOT", tmp_path)
+    monkeypatch.setattr(app.subprocess, "Popen", fake_popen)
+
+    action = app.ActionSpec(id="echo", label="Echo", argv=("python", "-c", "print('ok')"))
+    job = app.JOBS.create(action.id, action.label, list(action.argv))
+    returncode = app._run_subprocess_action(action, job["id"])
+
+    env = captured["env"]
+    assert returncode == 0
+    assert isinstance(env, dict)
+    assert env["PYTHONUTF8"] == "1"
+    assert env["PYTHONIOENCODING"] == "utf-8:replace"
+    assert captured["encoding"] == "utf-8"
+    assert captured["errors"] == "replace"
+    assert "\U0001f4ca ok" in app.JOBS.get(job["id"])["log"]
 
 
 def test_standard_run_action_fails_cleanly_when_vehicle_sim_is_missing(
