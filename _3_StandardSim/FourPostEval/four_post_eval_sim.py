@@ -28,6 +28,12 @@ FOUR_POST_HEAVE_END_S = FOUR_POST_HEAVE_START_S + FOUR_POST_POSE_STEP_S * (FOUR_
 FOUR_POST_ROLL_START_S = FOUR_POST_HEAVE_END_S + 1.0
 FOUR_POST_ROLL_POSE_COUNT = 11
 FOUR_POST_STOP_TIME_S = FOUR_POST_ROLL_START_S + FOUR_POST_POSE_STEP_S * FOUR_POST_ROLL_POSE_COUNT
+FOUR_POST_SAMPLE_WINDOW_S = 0.5
+FOUR_POST_SIGNAL_ABS_LIMIT = 1e9
+FOUR_POST_RATIO_ABS_LIMIT = 1e4
+FOUR_POST_FRACTION_ABS_LIMIT = 10.0
+FOUR_POST_PERCENT_ABS_LIMIT = 1e3
+FOUR_POST_MOTION_RATIO_ABS_LIMIT = 20.0
 
 
 FOUR_POST_EVAL_SIGNALS = [
@@ -226,6 +232,48 @@ def _configured_optional_float(config: dict[str, Any], keys: Sequence[str]) -> f
         if value is not None:
             return float(value)
     return None
+
+
+def _finite_abs_mask(values: Any, max_abs: float = FOUR_POST_SIGNAL_ABS_LIMIT) -> np.ndarray:
+    arr = np.asarray(values, dtype=float)
+    return np.isfinite(arr) & (np.abs(arr) <= float(max_abs))
+
+
+def _plausible_array(values: Any, max_abs: float = FOUR_POST_SIGNAL_ABS_LIMIT) -> np.ndarray:
+    arr = np.asarray(values, dtype=float).reshape(-1).copy()
+    arr[~_finite_abs_mask(arr, max_abs)] = np.nan
+    return arr
+
+
+def _nanmean_plausible(values: Any, max_abs: float = FOUR_POST_SIGNAL_ABS_LIMIT) -> float:
+    arr = _plausible_array(values, max_abs)
+    if arr.size == 0 or not np.isfinite(arr).any():
+        return float("nan")
+    return float(np.nanmean(arr))
+
+
+def _safe_divide_series(
+    numerator: Any,
+    denominator: Any,
+    *,
+    min_denominator_abs: float,
+    max_abs: float,
+) -> np.ndarray:
+    numerator_arr = _plausible_array(numerator)
+    denominator_arr = _plausible_array(denominator)
+    size = min(numerator_arr.size, denominator_arr.size)
+    out = np.full(size, float("nan"), dtype=float)
+    if size <= 0:
+        return out
+
+    numerator_arr = numerator_arr[:size]
+    denominator_arr = denominator_arr[:size]
+    mask = np.isfinite(numerator_arr) & np.isfinite(denominator_arr) & (
+        np.abs(denominator_arr) > min_denominator_abs
+    )
+    out[mask] = numerator_arr[mask] / denominator_arr[mask]
+    out[~_finite_abs_mask(out, max_abs)] = np.nan
+    return out
 
 
 def _configured_suspension_setup(config: dict[str, Any]) -> dict[str, Any]:
@@ -998,15 +1046,37 @@ class FourPostEvalSim:
         }
 
     def summarize(self, result: dict[str, Any]) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
-        t = np.asarray(result["time"], dtype=float).reshape(-1)
+        t = _plausible_array(result["time"])
 
         def sig(prefix: str, name: str) -> np.ndarray:
-            return np.asarray(result[f"{prefix}.{name}"], dtype=float).reshape(-1)
+            return _plausible_array(result[f"{prefix}.{name}"])
 
         def sample_at_times(signal: np.ndarray, times: list[float]) -> np.ndarray:
-            return np.array([signal[np.argmin(np.abs(t - ti))] for ti in times], dtype=float)
+            signal = _plausible_array(signal)
+            size = min(t.size, signal.size)
+            time = t[:size]
+            signal = signal[:size]
+            samples: list[float] = []
+            valid_time = np.isfinite(time)
+            half_window = 0.5 * FOUR_POST_SAMPLE_WINDOW_S
+            for ti in times:
+                window = valid_time & (np.abs(time - ti) <= half_window) & np.isfinite(signal)
+                if np.any(window):
+                    samples.append(float(np.nanmedian(signal[window])))
+                    continue
+
+                valid_signal = valid_time & np.isfinite(signal)
+                if not np.any(valid_signal):
+                    samples.append(float("nan"))
+                    continue
+
+                local_index = int(np.nanargmin(np.abs(time[valid_signal] - ti)))
+                samples.append(float(signal[valid_signal][local_index]))
+            return np.array(samples, dtype=float)
 
         def compute_gain(x: np.ndarray, y: np.ndarray) -> float:
+            x = _plausible_array(x)
+            y = _plausible_array(y)
             mask = np.isfinite(x) & np.isfinite(y)
             x = x[mask]
             y = y[mask]
@@ -1018,10 +1088,7 @@ class FourPostEvalSim:
             return float(coeffs[0])
 
         def nanmean_or_nan(values: Any) -> float:
-            arr = np.asarray(list(values), dtype=float)
-            if arr.size == 0 or not np.isfinite(arr).any():
-                return float("nan")
-            return float(np.nanmean(arr))
+            return _nanmean_plausible(list(values))
 
         def pose_sample_times(start_s: float, count: int) -> list[float]:
             # Sample inside the dead region after the load pulse, before the next pose change.
@@ -1117,11 +1184,30 @@ class FourPostEvalSim:
         fr_heave_fx = sample_at_times(fr_fx, heave_jack_times)
         rr_heave_fx = sample_at_times(rr_fx, heave_jack_times)
 
-        eps = 1e-6
-        fr_coeff_heave = fr_heave_jack_y / (fr_heave_fx + eps)
-        rr_coeff_heave = rr_heave_jack_y / (rr_heave_fx + eps)
-        fr_coeff_roll = fr_roll_jack_y / (fr_roll_fy + eps)
-        rr_coeff_roll = rr_roll_jack_y / (rr_roll_fy + eps)
+        fr_coeff_heave = _safe_divide_series(
+            fr_heave_jack_y,
+            fr_heave_fx,
+            min_denominator_abs=1e-3,
+            max_abs=FOUR_POST_RATIO_ABS_LIMIT,
+        )
+        rr_coeff_heave = _safe_divide_series(
+            rr_heave_jack_y,
+            rr_heave_fx,
+            min_denominator_abs=1e-3,
+            max_abs=FOUR_POST_RATIO_ABS_LIMIT,
+        )
+        fr_coeff_roll = _safe_divide_series(
+            fr_roll_jack_y,
+            fr_roll_fy,
+            min_denominator_abs=1e-3,
+            max_abs=FOUR_POST_RATIO_ABS_LIMIT,
+        )
+        rr_coeff_roll = _safe_divide_series(
+            rr_roll_jack_y,
+            rr_roll_fy,
+            min_denominator_abs=1e-3,
+            max_abs=FOUR_POST_RATIO_ABS_LIMIT,
+        )
 
         vehicle = _load_active_vehicle_yaml()
         _, sprung_cg_m = _combine_sprung_mass(vehicle)
@@ -1143,20 +1229,20 @@ class FourPostEvalSim:
         ref_long = h_cg / wheelbase
         ref_roll = h_cg / ((track_front + track_rear) / 2.0)
 
-        fr_anti_heave = 100.0 * fr_coeff_heave / ref_long
-        rr_anti_heave = 100.0 * rr_coeff_heave / ref_long
-        fr_anti_roll = 100.0 * fr_coeff_roll / ref_roll
-        rr_anti_roll = 100.0 * rr_coeff_roll / ref_roll
+        fr_anti_heave = _plausible_array(100.0 * fr_coeff_heave / ref_long, FOUR_POST_PERCENT_ABS_LIMIT)
+        rr_anti_heave = _plausible_array(100.0 * rr_coeff_heave / ref_long, FOUR_POST_PERCENT_ABS_LIMIT)
+        fr_anti_roll = _plausible_array(100.0 * fr_coeff_roll / ref_roll, FOUR_POST_PERCENT_ABS_LIMIT)
+        rr_anti_roll = _plausible_array(100.0 * rr_coeff_roll / ref_roll, FOUR_POST_PERCENT_ABS_LIMIT)
 
-        mask_fr_h = np.abs(fr_heave_fx) > 1e-3
-        mask_rr_h = np.abs(rr_heave_fx) > 1e-3
+        mask_fr_h = np.isfinite(fr_heave_jack_x) & np.isfinite(fr_anti_heave)
+        mask_rr_h = np.isfinite(rr_heave_jack_x) & np.isfinite(rr_anti_heave)
         fr_heave_x = fr_heave_jack_x[mask_fr_h]
         rr_heave_x = rr_heave_jack_x[mask_rr_h]
         fr_anti_heave = fr_anti_heave[mask_fr_h]
         rr_anti_heave = rr_anti_heave[mask_rr_h]
 
-        mask_fr = np.abs(fr_roll_fy) > 1e-3
-        mask_rr = np.abs(rr_roll_fy) > 1e-3
+        mask_fr = np.isfinite(fr_roll_jack_x) & np.isfinite(fr_anti_roll)
+        mask_rr = np.isfinite(rr_roll_jack_x) & np.isfinite(rr_anti_roll)
         fr_roll_x = fr_roll_jack_x[mask_fr]
         rr_roll_x = rr_roll_jack_x[mask_rr]
         fr_anti_roll = fr_anti_roll[mask_fr]
@@ -1170,7 +1256,7 @@ class FourPostEvalSim:
             spring = sample_at_times(np.asarray(spring_signal, dtype=float), list(sample_times))
             wheel = sample_at_times(np.asarray(wheel_signal, dtype=float), list(sample_times))
 
-            mask = np.isfinite(spring) & np.isfinite(wheel)
+            mask = _finite_abs_mask(spring) & _finite_abs_mask(wheel)
             spring = spring[mask]
             wheel = wheel[mask]
 
@@ -1185,7 +1271,9 @@ class FourPostEvalSim:
             dpoly = np.polyder(poly)
             ds_dw = dpoly(wheel)
             mr = 1.0 / np.abs(ds_dw)
-            return wheel, mr, float(np.nanmean(mr))
+            mr = _plausible_array(mr, FOUR_POST_MOTION_RATIO_ABS_LIMIT)
+            finite = np.isfinite(wheel) & np.isfinite(mr)
+            return wheel[finite], mr[finite], _nanmean_plausible(mr, FOUR_POST_MOTION_RATIO_ABS_LIMIT)
 
         def compute_stabar_motion_ratio_series(
             stabar_signal: np.ndarray,
@@ -1195,7 +1283,7 @@ class FourPostEvalSim:
             stabar = sample_at_times(np.asarray(stabar_signal, dtype=float), list(sample_times))
             phi = sample_at_times(np.asarray(roll_signal, dtype=float), list(sample_times))
 
-            mask = np.isfinite(stabar) & np.isfinite(phi)
+            mask = _finite_abs_mask(stabar) & _finite_abs_mask(phi)
             stabar = stabar[mask]
             phi = phi[mask]
 
@@ -1210,7 +1298,9 @@ class FourPostEvalSim:
             dpoly = np.polyder(poly)
             ds_dphi = dpoly(phi)
             mr = 1.0 / np.abs(ds_dphi)
-            return phi, mr, float(np.nanmean(mr))
+            mr = _plausible_array(mr, FOUR_POST_MOTION_RATIO_ABS_LIMIT)
+            finite = np.isfinite(phi) & np.isfinite(mr)
+            return phi[finite], mr[finite], _nanmean_plausible(mr, FOUR_POST_MOTION_RATIO_ABS_LIMIT)
 
         def sampled_series(
             x: np.ndarray,
@@ -1222,11 +1312,11 @@ class FourPostEvalSim:
             y = np.asarray(y, dtype=float).reshape(-1)
             sample_x = np.asarray(sample_x, dtype=float).reshape(-1)
 
-            mask = np.isfinite(x) & np.isfinite(y)
+            mask = _finite_abs_mask(x) & _finite_abs_mask(y)
             x = x[mask]
             y = y[mask]
 
-            if x.size < 2 or np.nanstd(x) < 1e-12:
+            if x.size < 2 or np.nanstd(x) < 1e-12 or not np.isfinite(fallback):
                 return np.full_like(sample_x, float(fallback), dtype=float)
 
             idx = np.argsort(x)
@@ -1241,7 +1331,7 @@ class FourPostEvalSim:
         def fill_from_finite_neighbors(x: np.ndarray, y: np.ndarray) -> np.ndarray:
             x = np.asarray(x, dtype=float).reshape(-1)
             y = np.asarray(y, dtype=float).reshape(-1).copy()
-            finite = np.isfinite(x) & np.isfinite(y)
+            finite = _finite_abs_mask(x) & _finite_abs_mask(y)
             missing = np.isfinite(x) & ~np.isfinite(y)
             if not missing.any() or finite.sum() < 2:
                 return y
@@ -1258,8 +1348,12 @@ class FourPostEvalSim:
         ) -> np.ndarray:
             motion_ratio = np.asarray(motion_ratio, dtype=float).reshape(-1)
             out = np.full_like(motion_ratio, float("nan"), dtype=float)
-            mask = np.isfinite(motion_ratio) & (np.abs(motion_ratio) > 1e-12)
+            mask = (
+                _finite_abs_mask(motion_ratio, FOUR_POST_MOTION_RATIO_ABS_LIMIT)
+                & (np.abs(motion_ratio) > 1e-12)
+            )
             out[mask] = bar_rate / (motion_ratio[mask]**2)
+            out = _plausible_array(out)
             return out
 
         motion_ratio_series: dict[str, np.ndarray] = {}
@@ -1294,8 +1388,16 @@ class FourPostEvalSim:
         stabar_motion_ratio_series["rr_stabar_motion_ratio_x"] = x_smr_r
         stabar_motion_ratio_series["rr_stabar_motion_ratio_vs_roll"] = y_smr_r
 
-        kw_f = k_sf / (mr_f**2)
-        kw_r = k_sr / (mr_r**2)
+        kw_f = (
+            k_sf / (mr_f**2)
+            if np.isfinite(mr_f) and 1e-12 < abs(mr_f) <= FOUR_POST_MOTION_RATIO_ABS_LIMIT
+            else float("nan")
+        )
+        kw_r = (
+            k_sr / (mr_r**2)
+            if np.isfinite(mr_r) and 1e-12 < abs(mr_r) <= FOUR_POST_MOTION_RATIO_ABS_LIMIT
+            else float("nan")
+        )
         kphi_spr_f = 0.5 * kw_f * (track_front**2)
         kphi_spr_r = 0.5 * kw_r * (track_rear**2)
         smr_f_roll = sampled_series(x_smr_f, y_smr_f, roll_vals, smr_f)
@@ -1311,6 +1413,7 @@ class FourPostEvalSim:
             out=np.full_like(kphi_total_roll, float("nan"), dtype=float),
             where=np.abs(kphi_total_roll) > 1e-9,
         )
+        lltd_stiffness_roll = _plausible_array(lltd_stiffness_roll, FOUR_POST_FRACTION_ABS_LIMIT)
 
         fr_l_fz_roll = roll_series["fr_l_fz_vs_roll"]
         fr_r_fz_roll = roll_series["fr_r_fz_vs_roll"]
@@ -1326,6 +1429,8 @@ class FourPostEvalSim:
         rear_load_transfer_roll = np.abs(
             (rr_l_fz_roll - rr_l_fz_ref) - (rr_r_fz_roll - rr_r_fz_ref)
         )
+        front_load_transfer_roll = _plausible_array(front_load_transfer_roll)
+        rear_load_transfer_roll = _plausible_array(rear_load_transfer_roll)
         total_load_transfer_roll = front_load_transfer_roll + rear_load_transfer_roll
         lltd_contact_roll = np.divide(
             front_load_transfer_roll,
@@ -1333,9 +1438,13 @@ class FourPostEvalSim:
             out=np.full_like(total_load_transfer_roll, float("nan"), dtype=float),
             where=total_load_transfer_roll > 1e-9,
         )
+        lltd_contact_roll = _plausible_array(lltd_contact_roll, FOUR_POST_FRACTION_ABS_LIMIT)
         lltd_contact_roll = fill_from_finite_neighbors(roll_vals, lltd_contact_roll)
         lltd_roll = lltd_contact_roll.copy()
-        lltd_geometry_delta_roll = lltd_contact_roll - lltd_stiffness_roll
+        lltd_geometry_delta_roll = _plausible_array(
+            lltd_contact_roll - lltd_stiffness_roll,
+            FOUR_POST_FRACTION_ABS_LIMIT,
+        )
 
         kphi_arb_f = nanmean_or_nan(kphi_arb_f_roll)
         kphi_arb_r = nanmean_or_nan(kphi_arb_r_roll)
@@ -1383,22 +1492,36 @@ class FourPostEvalSim:
 
         summary = {
             **{k: float(v) for k, v in gains.items()},
-            "avg_anti_dive_pct": float(np.mean(fr_anti_heave)),
-            "avg_anti_squat_pct": float(np.mean(rr_anti_heave)),
-            "avg_anti_roll_front_pct": float(np.mean(fr_anti_roll)),
-            "avg_anti_roll_rear_pct": float(np.mean(rr_anti_roll)),
-            "avg_lltd_front_frac": nanmean_or_nan(lltd_roll),
-            "avg_lltd_front_pct": float(100.0 * nanmean_or_nan(lltd_roll)),
+            "avg_anti_dive_pct": _nanmean_plausible(fr_anti_heave, FOUR_POST_PERCENT_ABS_LIMIT),
+            "avg_anti_squat_pct": _nanmean_plausible(rr_anti_heave, FOUR_POST_PERCENT_ABS_LIMIT),
+            "avg_anti_roll_front_pct": _nanmean_plausible(fr_anti_roll, FOUR_POST_PERCENT_ABS_LIMIT),
+            "avg_anti_roll_rear_pct": _nanmean_plausible(rr_anti_roll, FOUR_POST_PERCENT_ABS_LIMIT),
+            "avg_lltd_front_frac": _nanmean_plausible(lltd_roll, FOUR_POST_FRACTION_ABS_LIMIT),
+            "avg_lltd_front_pct": float(
+                100.0 * _nanmean_plausible(lltd_roll, FOUR_POST_FRACTION_ABS_LIMIT)
+            ),
             "avg_roll_rate_distribution_front_pct": float(
-                100.0 * nanmean_or_nan(lltd_stiffness_roll)
+                100.0 * _nanmean_plausible(lltd_stiffness_roll, FOUR_POST_FRACTION_ABS_LIMIT)
             ),
             "avg_antiroll_geometry_lltd_delta_pct": float(
-                100.0 * nanmean_or_nan(lltd_geometry_delta_roll)
+                100.0 * _nanmean_plausible(lltd_geometry_delta_roll, FOUR_POST_FRACTION_ABS_LIMIT)
             ),
-            "avg_longitudinal_jacking_coeff_front": float(np.mean(fr_coeff_heave)),
-            "avg_longitudinal_jacking_coeff_rear": float(np.mean(rr_coeff_heave)),
-            "avg_lateral_jacking_coeff_front": float(np.mean(fr_coeff_roll)),
-            "avg_lateral_jacking_coeff_rear": float(np.mean(rr_coeff_roll)),
+            "avg_longitudinal_jacking_coeff_front": _nanmean_plausible(
+                fr_coeff_heave,
+                FOUR_POST_RATIO_ABS_LIMIT,
+            ),
+            "avg_longitudinal_jacking_coeff_rear": _nanmean_plausible(
+                rr_coeff_heave,
+                FOUR_POST_RATIO_ABS_LIMIT,
+            ),
+            "avg_lateral_jacking_coeff_front": _nanmean_plausible(
+                fr_coeff_roll,
+                FOUR_POST_RATIO_ABS_LIMIT,
+            ),
+            "avg_lateral_jacking_coeff_rear": _nanmean_plausible(
+                rr_coeff_roll,
+                FOUR_POST_RATIO_ABS_LIMIT,
+            ),
             "avg_motion_ratio_front": float(mr_f),
             "avg_motion_ratio_rear": float(mr_r),
             "avg_stabar_motion_ratio_front": float(smr_f),

@@ -4,9 +4,12 @@ from pathlib import Path
 import subprocess
 from typing import Any
 
+import numpy as np
 import pytest
 import yaml
 
+from _0_Utils.plotting.plot_types.signal_plot import SignalPlot
+from _0_Utils.reporting.report_engine import _raw_time_series_frame
 from _3_StandardSim.FourPostEval.four_post_eval_sim import (
     FOUR_POST_HEAVE_POSE_COUNT,
     FOUR_POST_STOP_TIME_S,
@@ -201,6 +204,25 @@ def test_four_post_eval_passes_static_balanced_spring_free_lengths(tmp_path: Pat
     assert "motion_ratio" not in suspension_cfg["rear"]
     assert overrides["pVehicle.pFrAxleDW.springFreeLength"] == pytest.approx(0.199700878416)
     assert overrides["pVehicle.pRrAxleDW.springFreeLength"] == pytest.approx(0.263423049137)
+
+
+def test_signal_plots_filter_implausible_numeric_spikes() -> None:
+    result = {"series": {"x": np.array([0.0, 1.0, 2.0]), "y": np.array([1.0, 1e292, 3.0])}}
+    item = SignalPlot().get_xy(result, {"x": {"key": "x"}, "y": {"key": "y"}})[0]
+
+    np.testing.assert_allclose(item["x"], np.array([0.0, 2.0]))
+    np.testing.assert_allclose(item["y"], np.array([1.0, 3.0]))
+
+
+def test_raw_time_series_appendix_filters_implausible_numeric_spikes(tmp_path: Path) -> None:
+    path = tmp_path / "result.csv"
+    path.write_text("time,good,bad\n0,1,2\n1,3,1e292\n2,4,5\n", encoding="utf-8")
+
+    frame, time_column, signals = _raw_time_series_frame(path, max_points=100)
+
+    assert time_column == "time"
+    assert signals == ["good", "bad"]
+    assert np.isnan(frame.loc[1, "bad"])
 
 
 def test_standard_sens_spring_package_balances_free_length_from_rate() -> None:

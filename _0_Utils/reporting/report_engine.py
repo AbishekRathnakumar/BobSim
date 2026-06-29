@@ -8,6 +8,8 @@ import pandas as pd
 from _0_Utils.plotting.plot_engine import PlotEngine
 from _0_Utils.reporting.sections import add_summary_page, add_title_page
 
+DEFAULT_RAW_TIME_SERIES_ABS_LIMIT = 1e9
+
 
 def _case_result_path(case):
     raw_path = case.get("_result_file") if isinstance(case, dict) else None
@@ -30,11 +32,13 @@ def _downsample_frame(frame, max_points):
     return frame.iloc[::step, :]
 
 
-def _raw_time_series_frame(path, max_points):
+def _raw_time_series_frame(path, max_points, max_abs_value=DEFAULT_RAW_TIME_SERIES_ABS_LIMIT):
     data = pd.read_csv(path)
     if data.empty:
         return pd.DataFrame(), None, []
     numeric = data.apply(pd.to_numeric, errors="coerce").dropna(axis=1, how="all")
+    if max_abs_value and max_abs_value > 0:
+        numeric = numeric.mask(numeric.abs() > float(max_abs_value)).dropna(axis=1, how="all")
     if numeric.empty:
         return pd.DataFrame(), None, []
     time_column = next((column for column in ("time", "Time", "t") if column in numeric.columns), None)
@@ -51,13 +55,16 @@ def _add_raw_time_series_appendix(pdf, result, config):
     if not cases:
         return
     max_points = int(report_cfg.get("raw_time_series_max_points", 2500))
+    max_abs_value = float(
+        report_cfg.get("raw_time_series_max_abs_value", DEFAULT_RAW_TIME_SERIES_ABS_LIMIT)
+    )
     standard = config.get("standard") or report_cfg.get("standard") or "Simulation"
     print("[report] Rendering raw time-series appendix")
     for case_index, case in enumerate(cases, start=1):
         path = _case_result_path(case)
         if path is None:
             continue
-        frame, time_column, signals = _raw_time_series_frame(path, max_points)
+        frame, time_column, signals = _raw_time_series_frame(path, max_points, max_abs_value)
         if frame.empty or not signals:
             continue
         x = frame[time_column] if time_column else pd.Series(range(len(frame)), index=frame.index)

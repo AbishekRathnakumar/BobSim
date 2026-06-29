@@ -77,7 +77,13 @@ def _resolve_unit(
     )
 
 
-def _format_table_value(value, fmt: str, scale: float = 1.0) -> str:
+def _format_table_value(
+    value,
+    fmt: str,
+    scale: float = 1.0,
+    *,
+    max_abs: float = 1e9,
+) -> str:
     if value is None:
         return "—"
 
@@ -89,10 +95,11 @@ def _format_table_value(value, fmt: str, scale: float = 1.0) -> str:
         except Exception:
             return str(value)
 
-    if not np.isfinite(numeric):
+    numeric *= scale
+    if not np.isfinite(numeric) or abs(numeric) > max_abs:
         return "—"
 
-    return fmt.format(numeric * scale)
+    return fmt.format(numeric)
 
 
 def add_four_post_setup_page(
@@ -408,13 +415,7 @@ def add_knc_summary_page(
         for label, key, unit, fmt in rows:
             val = summary.get(key, None)
             unit, scale = _resolve_unit(unit_overrides, key, unit)
-            if val is None:
-                val_str = "—"
-            else:
-                try:
-                    val_str = fmt.format(float(val) * scale)
-                except (TypeError, ValueError):
-                    val_str = fmt.format(val)
+            val_str = _format_table_value(val, fmt, scale)
 
             color = section_color or metric_color(key)
             plt.text(x_label, y, label, fontsize=11, color=color)
