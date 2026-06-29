@@ -3085,7 +3085,7 @@ def save_active_results(
     (workspace_result_dir / "manifest.json").write_text(json.dumps(workspace_manifest, indent=2), encoding="utf-8")
     return {
         "saved": _result_manifest_payload(workspace_result_dir / "manifest.json"),
-        **saved_results_payload(vehicle_key),
+        **saved_results_payload(),
     }
 
 
@@ -4586,7 +4586,7 @@ class BobSimHandler(BaseHTTPRequestHandler):
                 self._send_json(sim_config_library_payload(_query_one(parsed.query, "workflow_id")))
             elif parsed.path == "/api/results":
                 query = parse_qs(parsed.query)
-                vehicle_key = query.get("vehicle_key", [None])[0] or _active_vehicle_workspace_key()
+                vehicle_key = query.get("vehicle_key", [None])[0] if "vehicle_key" in query else None
                 self._send_json(saved_results_payload(vehicle_key))
             elif parsed.path == "/api/results/sources":
                 query = parse_qs(parsed.query)

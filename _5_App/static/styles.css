@@ -3081,7 +3081,7 @@ body.resizing-plot-pane * {
 }
 
 .study-catalog::before {
-  content: "Analysis";
+  content: "Archive";
 }
 
 .results-save-actions {
@@ -3096,7 +3096,7 @@ body.resizing-plot-pane * {
 }
 
 .results-catalog::before {
-  content: "Review Packages";
+  content: "Local Runs";
 }
 
 .results-pane {

@@ -1146,6 +1146,30 @@ def test_app_can_save_active_simulation_results(tmp_path: Path, monkeypatch: pyt
     assert sources[0]["path"].startswith("_5_App/vehicle_workspaces/resultcar/results/")
 
 
+def test_results_route_is_global_unless_vehicle_key_is_requested(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str | None] = []
+    sent: list[dict[str, object]] = []
+
+    def fake_saved_results_payload(vehicle_key: str | None = None) -> dict[str, object]:
+        calls.append(vehicle_key)
+        return {"vehicle_key": vehicle_key, "results": []}
+
+    def fake_send_json(self: app.BobSimHandler, payload: object, **_kwargs: object) -> None:
+        sent.append(payload if isinstance(payload, dict) else {"payload": payload})
+
+    monkeypatch.setattr(app, "saved_results_payload", fake_saved_results_payload)
+    monkeypatch.setattr(app.BobSimHandler, "_send_json", fake_send_json)
+
+    handler = app.BobSimHandler.__new__(app.BobSimHandler)
+    handler.path = "/api/results"
+    handler.do_GET()
+    handler.path = "/api/results?vehicle_key=resultcar"
+    handler.do_GET()
+
+    assert calls == [None, "resultcar"]
+    assert sent == [{"vehicle_key": None, "results": []}, {"vehicle_key": "resultcar", "results": []}]
+
+
 def test_app_can_explore_result_csv_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     results_dir = tmp_path / "_3_StandardSim/results"
     results_dir.mkdir(parents=True)

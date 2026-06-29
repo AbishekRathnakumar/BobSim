@@ -46,7 +46,7 @@
           <div class="rail-stack">
             <button class="rail-item active" data-view="setup" type="button">Setup</button>
             <button class="rail-item" data-view="standard" type="button">Simulation</button>
-            <button class="rail-item" data-view="studies" type="button">Analysis</button>
+            <button class="rail-item" data-view="studies" type="button">Archive</button>
           </div>
           <div class="rail-actions">
             <button id="rail-primary-btn" class="run-button" type="button">Save Vehicle</button>
@@ -248,19 +248,19 @@
         <section id="studies-view" class="screen">
           <div class="screen-head">
             <div>
-              <h2>Analysis</h2>
+              <h2>Archive</h2>
               <p id="studies-context"></p>
             </div>
           </div>
 
-          <div class="standard-workspace studies-workspace analysis-workspace">
-            <section class="workflow-list study-catalog results-catalog analysis-catalog">
+          <div class="standard-workspace studies-workspace analysis-workspace archive-workspace">
+            <section class="workflow-list study-catalog results-catalog analysis-catalog archive-catalog">
               <div id="saved-result-list" class="study-catalog-grid"></div>
             </section>
 
             <section class="sim-pane study-pane results-pane results-app-pane">
               <div id="result-summary-panel" class="result-summary-panel"></div>
-              <h3 id="study-selected-title">Review Files</h3>
+              <h3 id="study-selected-title">Archived Files</h3>
               <div id="study-output-list" class="output-list"></div>
               <div id="study-preview" class="preview"></div>
             </section>

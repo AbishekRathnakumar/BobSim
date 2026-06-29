@@ -511,8 +511,7 @@ async function refreshTireTemplates() {
 
 async function refreshSavedResults() {
   try {
-    const query = activeVehicleKey() ? `?vehicle_key=${encodeURIComponent(activeVehicleKey())}` : "";
-    state.savedResultsPayload = await api(`/api/results${query}`);
+    state.savedResultsPayload = await api("/api/results");
   } catch (error) {
     state.savedResultsPayload = { results: [], error: error.message };
   }
@@ -586,8 +585,7 @@ function activeVehicleConfigReady() {
 function vehicleWorkspaceStatusLabel() {
   const workspace = activeVehicleWorkspace();
   if (!workspace.key) return "No vehicle config selected";
-  const resultCount = workspace.groups?.results?.count || 0;
-  return `Config ${workspace.key} | ${resultCount} review package${resultCount === 1 ? "" : "s"}`;
+  return `Config ${workspace.key}`;
 }
 
 function studyWorkflows() {
@@ -1170,10 +1168,10 @@ function renderRailActions() {
   secondary.classList.remove("run-button");
   if (state.view === "studies") {
     setActionButton(primary, {
-      label: "Refresh Analysis",
+      label: "Refresh Archive",
       busy: false,
       disabled: false,
-      title: "Refresh review packages for the active vehicle",
+      title: "Refresh local simulation archive",
     });
   } else {
     const workflow = selectedWorkflow();
@@ -3879,11 +3877,13 @@ function firstExistingWorkflowOutput(workflow) {
 }
 
 function savedReviewForWorkflow(workflowId) {
-  return savedResults().find((result) => result.workflow?.id === workflowId) || null;
+  const key = activeVehicleKey();
+  if (!key || !vehicleDefinitionCurrent()) return null;
+  return savedResults().find((result) => result.workflow?.id === workflowId && result.vehicle_key === key) || null;
 }
 
 function workflowReviewAvailable(workflow) {
-  return Boolean(savedReviewForWorkflow(workflow?.id) || firstExistingWorkflowOutput(workflow));
+  return Boolean(savedReviewForWorkflow(workflow?.id));
 }
 
 async function reviewSimulationWorkflow(workflowId) {
@@ -3898,9 +3898,6 @@ async function reviewSimulationWorkflow(workflowId) {
     render();
     return;
   }
-  const output = firstExistingWorkflowOutput(workflow);
-  if (!output) return;
-  window.open(`/files/${encodeURIComponent(output.path)}`, "_blank", "noreferrer");
 }
 
 function renderSimulationModal(workflow = selectedWorkflow()) {
@@ -3921,11 +3918,10 @@ function renderSimulationModal(workflow = selectedWorkflow()) {
 }
 
 function workflowCard(workflow) {
-  const outputCount = workflow.outputs.filter((output) => output.exists).length;
   const runLabel = workflow.actions.length > 1 ? "Build + run" : "Run";
   const meta = simWorkflowMeta(workflow);
   const canReview = workflowReviewAvailable(workflow);
-  const reviewTitle = canReview ? "Open review package" : "Run this simulation before reviewing outputs";
+  const reviewTitle = canReview ? "Open archived simulation results" : "Run this simulation to create a local archive entry";
   const canConfigure = workflowAvailable(workflow);
   const configureTitle = canConfigure ? "Configure simulation" : workflowUnavailableMessage(workflow);
   return `
@@ -3950,15 +3946,23 @@ function workflowCard(workflow) {
           ${simDetailBlock("Outputs", meta.outputs)}
         </div>
         <div class="card-actions">
-          <span class="mini-pill ${workflow.config?.exists ? "ok" : "missing"}">Config</span>
-          ${canConfigure ? "" : `<span class="mini-pill missing">Unavailable</span>`}
-          <span class="mini-pill ${outputCount ? "ok" : "missing"}">${outputCount}/${workflow.outputs.length} outputs</span>
+          ${architectureStatusPill()}
           <button class="ghost-button simulation-review-button" type="button" data-review-workflow="${escapeHtml(workflow.id)}"${canReview ? "" : " disabled"} title="${escapeHtml(reviewTitle)}">Review</button>
           <button class="run-button" type="button" data-configure-workflow="${escapeHtml(workflow.id)}"${canConfigure ? "" : " disabled"} title="${escapeHtml(configureTitle)}">Configure</button>
         </div>
       </div>
     </article>
   `;
+}
+
+function architectureStatusPill() {
+  if (!activeVehicleConfigReady()) {
+    return `<span class="mini-pill missing" title="Save a vehicle before running simulations">No saved vehicle</span>`;
+  }
+  if (!vehicleDefinitionCurrent()) {
+    return `<span class="mini-pill missing" title="Save Vehicle and Write to MBD before running simulations">Architecture stale</span>`;
+  }
+  return `<span class="mini-pill ok" title="Current architecture is saved and written to MBD">${escapeHtml(activeArchitecture())}</span>`;
 }
 
 function workflowDescription(workflow) {
@@ -4338,8 +4342,8 @@ function renderResultSaveControls() {
   if (context) {
     const status = state.resultsStatusMessage ? ` | ${state.resultsStatusMessage}` : "";
     const count = savedResults().length;
-    const packageLabel = count === 1 ? "1 review package" : `${count} review packages`;
-    context.textContent = `${activeVehicleName()} | ${vehicleWorkspaceStatusLabel()} | ${packageLabel}${status}`;
+    const packageLabel = count === 1 ? "1 local run" : `${count} local runs`;
+    context.textContent = `Local simulation archive | ${packageLabel}${status}`;
   }
   const saveButton = document.getElementById("run-study-btn");
   if (saveButton) {
@@ -4686,12 +4690,8 @@ function renderSavedResultCatalog() {
   const grid = document.getElementById("saved-result-list");
   if (!grid) return;
   const results = savedResults();
-  if (!activeVehicleConfigReady()) {
-    grid.innerHTML = `<div class="empty-state">Save this vehicle config before viewing review packages.</div>`;
-    return;
-  }
   if (!results.length) {
-    grid.innerHTML = `<div class="empty-state">No review packages yet. Run a simulation to generate the report, metrics, and signal archive.</div>`;
+    grid.innerHTML = `<div class="empty-state">No archived simulation runs yet. Run a simulation to save the report, metrics, and signal archive locally.</div>`;
     return;
   }
   grid.innerHTML = results.map(resultArchiveCard).join("");
@@ -4771,10 +4771,10 @@ function renderSavedResultOutputs() {
   const preview = document.getElementById("study-preview");
   const result = selectedSavedResult();
   if (!title || !list || !preview) return;
-  title.textContent = result?.label ? `${result.label} Files` : "Review Files";
+  title.textContent = result?.label ? `${result.label} Files` : "Archived Files";
   if (!result?.files?.length) {
-    list.innerHTML = `<div class="empty-state">No review files yet.</div>`;
-    preview.innerHTML = `<div class="empty-state">Run a simulation to create downloadable review files.</div>`;
+    list.innerHTML = `<div class="empty-state">No archived files yet.</div>`;
+    preview.innerHTML = `<div class="empty-state">Run a simulation to create downloadable archive files.</div>`;
     return;
   }
   list.innerHTML = result.files.map(outputItem).join("");
@@ -4973,7 +4973,6 @@ function renderStudyCatalog() {
 }
 
 function studyWorkflowCard(workflow) {
-  const outputCount = workflow.outputs.filter((output) => output.exists).length;
   const group = studyGroupMeta(workflow.group);
   const canRun = workflowAvailable(workflow);
   return `
@@ -4986,7 +4985,6 @@ function studyWorkflowCard(workflow) {
       <div class="signal-row">
         <span class="mini-pill ${workflow.config?.exists ? "ok" : "missing"}">Config</span>
         ${canRun ? "" : `<span class="mini-pill missing">Unavailable</span>`}
-        <span class="mini-pill ${outputCount ? "ok" : "missing"}">${outputCount}/${workflow.outputs.length} outputs</span>
       </div>
     </article>
   `;
@@ -12874,7 +12872,7 @@ function wireEvents() {
   document.getElementById("rail-primary-btn").addEventListener("click", async () => {
     if (state.view === "setup") await saveVehicleAs({ useNameInput: false, actionKey: "rail-save-vehicle" });
     else if (state.view === "studies") {
-      state.resultsStatusMessage = "Refreshing review packages";
+      state.resultsStatusMessage = "Refreshing archive";
       renderStudies();
       await refreshSavedResults();
       state.resultsStatusMessage = "";
@@ -12935,12 +12933,10 @@ refresh();
 setInterval(async () => {
   if ((state.status?.jobs || []).some((job) => job.status === "running" || job.status === "queued")) {
     state.status = await api("/api/status");
+    await refreshSavedResults();
     renderTopbar();
     renderModelicaStack();
-    if (state.view === "studies") {
-      await refreshSavedResults();
-      renderStudies();
-    }
+    if (state.view === "studies") renderStudies();
     else if (state.view === "standard") renderStandard();
   }
 }, 2000);
