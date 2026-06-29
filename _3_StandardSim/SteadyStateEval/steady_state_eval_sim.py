@@ -120,7 +120,7 @@ def _velocity_cap_entries(value: Any, *, name: str) -> list[tuple[float, float]]
 
     entries: list[tuple[float, float]] = []
     if isinstance(value, dict):
-        raw_items = value.items()
+        raw_items: list[tuple[Any, Any]] = list(value.items())
     elif isinstance(value, (list, tuple, np.ndarray)):
         raw_items = []
         for index, item in enumerate(value):
