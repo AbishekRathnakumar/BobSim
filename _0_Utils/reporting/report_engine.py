@@ -49,7 +49,11 @@ def _raw_time_series_frame(path, max_points, max_abs_value=DEFAULT_RAW_TIME_SERI
 
 def _add_raw_time_series_appendix(pdf, result, config):
     report_cfg = config.get("report", {})
-    if not report_cfg.get("raw_time_series_appendix", True):
+    if not isinstance(report_cfg, dict):
+        report_cfg = {}
+    standard = config.get("standard") or report_cfg.get("standard") or "Simulation"
+    default_enabled = standard != "FourPostEval"
+    if not report_cfg.get("raw_time_series_appendix", default_enabled):
         return
     cases = [case for case in result.get("cases", []) if _case_result_path(case)]
     if not cases:
@@ -58,7 +62,6 @@ def _add_raw_time_series_appendix(pdf, result, config):
     max_abs_value = float(
         report_cfg.get("raw_time_series_max_abs_value", DEFAULT_RAW_TIME_SERIES_ABS_LIMIT)
     )
-    standard = config.get("standard") or report_cfg.get("standard") or "Simulation"
     print("[report] Rendering raw time-series appendix")
     for case_index, case in enumerate(cases, start=1):
         path = _case_result_path(case)

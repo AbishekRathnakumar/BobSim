@@ -100,6 +100,14 @@ def load_config(path: str | Path) -> dict[str, Any]:
     return cast(dict[str, Any], config)
 
 
+def _normalize_four_post_report_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Keep older app-data report configs aligned with current FourPost semantics."""
+    report_cfg = config.setdefault("report", {})
+    if isinstance(report_cfg, dict):
+        report_cfg.setdefault("raw_time_series_appendix", False)
+    return config
+
+
 def _as_mapping(value: Any, *, name: str) -> dict[str, Any]:
     if value is None:
         return {}
@@ -1602,6 +1610,7 @@ class FourPostEvalSim:
 def main(path: str | Path | None = None) -> dict[str, Any]:
     config_path = Path(path) if path is not None else DEFAULT_CONFIG_PATH
     config = load_config(config_path)
+    _normalize_four_post_report_config(config)
 
     result = FourPostEvalSim(config).run()
 

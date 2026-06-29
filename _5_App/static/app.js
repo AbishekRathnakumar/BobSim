@@ -99,6 +99,7 @@ const state = {
   resultPlotStatus: "idle",
   resultPlotMessage: "",
   savingResults: false,
+  deletingResultId: null,
   resultsStatusMessage: "",
   processingPayload: null,
   selectedProcessingWorkflowId: null,
@@ -3391,6 +3392,36 @@ async function saveActiveResults() {
   }
 }
 
+async function deleteSavedResult(resultId) {
+  const result = savedResults().find((item) => item.id === resultId);
+  if (!result || state.deletingResultId) return;
+  const label = result.label || result.workflow?.label || "archived run";
+  if (!window.confirm(`Delete archived run "${label}"?`)) return;
+  state.deletingResultId = resultId;
+  state.resultsStatusMessage = "Deleting archived run";
+  renderStudies();
+  try {
+    const payload = await api("/api/results/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ result_id: resultId }),
+    });
+    state.savedResultsPayload = { results: payload.results || [] };
+    if (state.selectedResultId === resultId) {
+      state.selectedResultId = state.savedResultsPayload.results[0]?.id || null;
+    }
+    state.status = await api("/api/status");
+    await refreshResultSources();
+    state.resultsStatusMessage = "Deleted archived run";
+  } catch (error) {
+    state.resultsStatusMessage = error.message;
+  } finally {
+    state.deletingResultId = null;
+    renderRailActions();
+    renderStudies();
+  }
+}
+
 function defaultTirTemplateName() {
   const activeTemplate = state.vehiclePayload?.data?.front?.tire?.template
     || state.vehiclePayload?.data?.rear?.tire?.template;
@@ -4702,17 +4733,27 @@ function renderSavedResultCatalog() {
       renderStudies();
     });
   });
+  grid.querySelectorAll("[data-delete-result]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      await deleteSavedResult(button.dataset.deleteResult);
+    });
+  });
 }
 
 function resultArchiveCard(result) {
   const fileCount = result.files?.filter((file) => file.exists).length || 0;
   const workflow = result.workflow?.label || "Simulation";
   const runCount = Number(result.analysis?.run_count || result.run_count || 0);
+  const deleting = state.deletingResultId === result.id;
   return `
     <article class="workflow-card study-card result-card ${result.id === state.selectedResultId ? "active" : ""}" data-result-id="${escapeHtml(result.id)}">
       <div class="card-head">
         <div class="card-title">${escapeHtml(result.label || workflow)}</div>
-        <span class="mini-pill">${escapeHtml(workflow)}</span>
+        <div class="archive-card-actions">
+          <span class="mini-pill">${escapeHtml(workflow)}</span>
+          <button class="ghost-button danger-button archive-delete-button" type="button" data-delete-result="${escapeHtml(result.id)}"${deleting ? " disabled" : ""}>${deleting ? "Deleting" : "Delete"}</button>
+        </div>
       </div>
       <div class="card-meta">${escapeHtml(result.created_label || "")}</div>
       <div class="signal-row">
@@ -4734,6 +4775,7 @@ function renderSavedResultSummary() {
   }
   const architecture = result.architecture || {};
   const runCount = Number(result.analysis?.run_count || result.run_count || 0);
+  const deleting = state.deletingResultId === result.id;
   panel.innerHTML = `
     <div class="result-summary-grid">
       ${resultSummaryItem("Workflow", result.workflow?.label || "Simulation")}
@@ -4744,7 +4786,13 @@ function renderSavedResultSummary() {
       ${result.vehicle_snapshot ? resultSummaryLink("Vehicle YAML", result.vehicle_snapshot) : ""}
       ${result.config_snapshot ? resultSummaryLink("Run Config", result.config_snapshot) : ""}
     </div>
+    <div class="result-summary-actions">
+      <button class="ghost-button danger-button" type="button" data-delete-selected-result="${escapeHtml(result.id)}"${deleting ? " disabled" : ""}>${deleting ? "Deleting Archived Run" : "Delete Archived Run"}</button>
+    </div>
   `;
+  panel.querySelector("[data-delete-selected-result]")?.addEventListener("click", () => {
+    deleteSavedResult(result.id);
+  });
 }
 
 function resultSummaryItem(label, value) {

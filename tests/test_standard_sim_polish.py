@@ -14,6 +14,7 @@ from _3_StandardSim.FourPostEval.four_post_eval_sim import (
     FOUR_POST_HEAVE_POSE_COUNT,
     FOUR_POST_STOP_TIME_S,
     FourPostEvalSim,
+    _normalize_four_post_report_config,
 )
 from _3_StandardSim._modelica_runner import ModelicaRunner
 from _3_StandardSim.RampSteerEval.ramp_steer_eval_sim import RampSteerEvalSim
@@ -182,6 +183,61 @@ def test_four_post_eval_uses_full_symmetric_pose_schedule() -> None:
     assert FOUR_POST_HEAVE_POSE_COUNT == 11
     assert FOUR_POST_STOP_TIME_S == 118.0
     assert FourPostEvalSim(config).build_overrides()["_stopTime"] == pytest.approx(118.0)
+
+
+def test_four_post_report_uses_jacking_antiroll_plot_without_raw_appendix() -> None:
+    for rel_path in (
+        Path("_3_StandardSim/FourPostEval/four_post_eval_config.yml"),
+        Path("_5_App/sim_configs/_defaults/four-post.yml"),
+    ):
+        config = _load_yaml(rel_path)
+        assert config["report"]["raw_time_series_appendix"] is False
+
+        jacking_roll = config["plots"]["jacking_roll"]
+        assert jacking_roll["title"] == "Geometric Anti-Roll vs Roll"
+        assert [subplot["x"]["key"] for subplot in jacking_roll["subplots"]] == [
+            "fr_jacking_vs_roll_x",
+            "rr_jacking_vs_roll_x",
+        ]
+        assert [subplot["y"]["key"] for subplot in jacking_roll["subplots"]] == [
+            "fr_anti_vs_roll",
+            "rr_anti_vs_roll",
+        ]
+
+
+def test_four_post_report_normalizer_disables_raw_appendix_for_legacy_app_data_config() -> None:
+    config = {
+        "report": {"enabled": True},
+        "plots": {
+            "jacking_roll": {
+                "title": "Geometric Anti-Roll vs Roll",
+                "subplots": [
+                    {
+                        "x": {"key": "fr_jacking_vs_roll_x", "label": "Roll (deg)"},
+                        "y": {"key": "fr_anti_vs_roll", "label": "Geometric Anti-Roll (%)"},
+                    },
+                    {
+                        "x": {"key": "rr_jacking_vs_roll_x", "label": "Roll (deg)"},
+                        "y": {"key": "rr_anti_vs_roll", "label": "Geometric Anti-Roll (%)"},
+                    },
+                ],
+            }
+        },
+    }
+
+    normalized = _normalize_four_post_report_config(config)
+    jacking_roll = normalized["plots"]["jacking_roll"]
+
+    assert normalized["report"]["raw_time_series_appendix"] is False
+    assert jacking_roll["title"] == "Geometric Anti-Roll vs Roll"
+    assert [subplot["x"]["key"] for subplot in jacking_roll["subplots"]] == [
+        "fr_jacking_vs_roll_x",
+        "rr_jacking_vs_roll_x",
+    ]
+    assert [subplot["y"]["key"] for subplot in jacking_roll["subplots"]] == [
+        "fr_anti_vs_roll",
+        "rr_anti_vs_roll",
+    ]
 
 
 def test_four_post_eval_passes_static_balanced_spring_free_lengths(tmp_path: Path) -> None:

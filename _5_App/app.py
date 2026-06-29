@@ -71,10 +71,26 @@ def _runtime_copy_ignore(_: str, names: list[str]) -> set[str]:
     return {name for name in names if name in ignored or name.endswith((".pyc", ".pyo"))}
 
 
-APP_OWNED_RUNTIME_FILES = {
+APP_REFRESH_RUNTIME_PATHS = {
+    "_0_Utils/external/BobLib/BobLib",
+    "_0_Utils/plotting",
+    "_0_Utils/reporting",
     "_3_StandardSim/build_vehicle_sim.mos",
     "_3_StandardSim/build_four_post_sim.mos",
+    "_5_App/sim_configs/_defaults",
 }
+
+APP_MERGE_RUNTIME_DIRS = {
+    "_0_Utils/tire_templates",
+    "_0_Utils/vehicle_templates",
+}
+
+
+def _remove_runtime_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
 
 
 def _seed_runtime_root(runtime_root: Path) -> None:
@@ -126,14 +142,28 @@ def _seed_runtime_root(runtime_root: Path) -> None:
         if not source.exists():
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
+        refresh = rel_path in APP_REFRESH_RUNTIME_PATHS
+        merge = rel_path in APP_MERGE_RUNTIME_DIRS
         if source.is_dir():
+            if target.exists() and not target.is_dir():
+                _remove_runtime_path(target)
+            if refresh and target.exists():
+                _remove_runtime_path(target)
             if target.exists():
+                if merge:
+                    shutil.copytree(
+                        source,
+                        target,
+                        symlinks=True,
+                        ignore=_runtime_copy_ignore,
+                        dirs_exist_ok=True,
+                    )
                 continue
             shutil.copytree(source, target, symlinks=True, ignore=_runtime_copy_ignore)
         else:
             if target.is_dir():
                 shutil.rmtree(target)
-            if target.exists() and rel_path not in APP_OWNED_RUNTIME_FILES:
+            if target.exists() and not refresh:
                 continue
             shutil.copy2(source, target)
     for rel_path in runtime_output_dirs:
@@ -3031,6 +3061,71 @@ def saved_results_payload(vehicle_key: str | None = None) -> dict[str, Any]:
     return {"vehicle_key": key or _active_vehicle_workspace_key(), "results": results}
 
 
+def _validated_result_id(raw_result_id: str) -> str:
+    result_id = str(raw_result_id or "").strip()
+    if not result_id or not re.fullmatch(r"[A-Za-z0-9_.-]+", result_id):
+        raise ValueError("Invalid archived result id")
+    return result_id
+
+
+def _remove_result_dir(path: Path, root: Path) -> bool:
+    path = path.resolve()
+    root = root.resolve()
+    if path == root or root not in path.parents:
+        raise ValueError(f"Archived result path escapes root: {path}")
+    if not path.exists():
+        return False
+    if not path.is_dir():
+        raise ValueError(f"Archived result is not a directory: {path}")
+    shutil.rmtree(path)
+    return True
+
+
+def delete_saved_result(result_id: str, vehicle_key: str | None = None) -> dict[str, Any]:
+    result_id = _validated_result_id(result_id)
+    removed: list[str] = []
+    manifest_vehicle_key = ""
+    workspace_path = ""
+    saved_root = _saved_results_dir()
+    global_result_dir = _safe_repo_path(saved_root / result_id)
+    global_manifest = global_result_dir / "manifest.json"
+
+    if global_manifest.is_file():
+        try:
+            manifest = json.loads(global_manifest.read_text(encoding="utf-8"))
+            if isinstance(manifest, dict):
+                manifest_vehicle_key = str(manifest.get("vehicle_key") or "")
+                workspace_path = str(manifest.get("workspace_result_path") or "")
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    if _remove_result_dir(global_result_dir, saved_root):
+        removed.append(global_result_dir.relative_to(ROOT).as_posix())
+
+    workspace_root = _safe_repo_path(VEHICLE_WORKSPACE_ROOT)
+    workspace_candidates: dict[Path, None] = {}
+    for key in (vehicle_key, manifest_vehicle_key):
+        if key:
+            workspace_candidates[_vehicle_workspace_dir(key, create=False) / "results" / result_id] = None
+    if workspace_path:
+        workspace_candidates[_safe_repo_path(workspace_path)] = None
+    if workspace_root.is_dir():
+        for candidate in workspace_root.glob(f"*/results/{result_id}"):
+            workspace_candidates[candidate] = None
+
+    for candidate in workspace_candidates:
+        if _remove_result_dir(candidate, workspace_root):
+            removed.append(candidate.relative_to(ROOT).as_posix())
+
+    if not removed:
+        raise FileNotFoundError(result_id)
+    return {
+        "deleted": result_id,
+        "removed": removed,
+        **saved_results_payload(vehicle_key if vehicle_key else None),
+    }
+
+
 def save_active_results(
     workflow_id: str,
     name: str | None = None,
@@ -4761,6 +4856,12 @@ class BobSimHandler(BaseHTTPRequestHandler):
                 self._send_json(payload)
             elif parsed.path == "/api/results/save":
                 payload = save_active_results(str(body.get("workflow_id", "")), str(body.get("name", "")))
+                self._send_json(payload)
+            elif parsed.path == "/api/results/delete":
+                payload = delete_saved_result(
+                    str(body.get("result_id", "")),
+                    str(body.get("vehicle_key", "")) or None,
+                )
                 self._send_json(payload)
             elif parsed.path == "/api/processing/workflows":
                 payload = add_processing_workflow(body)

@@ -338,7 +338,7 @@ def test_deploy_artifacts_are_named_bobsim() -> None:
     assert deploy.DIST_ROOT.name == "BobSim"
 
 
-def test_runtime_seed_refreshes_app_owned_build_scripts(
+def test_runtime_seed_refreshes_app_owned_paths_and_preserves_user_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -346,21 +346,38 @@ def test_runtime_seed_refreshes_app_owned_build_scripts(
     runtime_root = tmp_path / "runtime"
     package_script = package_root / "_3_StandardSim/build_vehicle_sim.mos"
     package_vehicle = package_root / "vehicle.yml"
+    package_default = package_root / "_5_App/sim_configs/_defaults/four-post.yml"
+    package_tire = package_root / "_0_Utils/tire_templates/stock.tir"
     runtime_script = runtime_root / "_3_StandardSim/build_vehicle_sim.mos"
     runtime_vehicle = runtime_root / "vehicle.yml"
+    runtime_default = runtime_root / "_5_App/sim_configs/_defaults/four-post.yml"
+    runtime_tire = runtime_root / "_0_Utils/tire_templates/stock.tir"
+    runtime_custom_tire = runtime_root / "_0_Utils/tire_templates/custom.tir"
 
     package_script.parent.mkdir(parents=True)
     runtime_script.parent.mkdir(parents=True)
+    package_default.parent.mkdir(parents=True)
+    runtime_default.parent.mkdir(parents=True)
+    package_tire.parent.mkdir(parents=True)
+    runtime_tire.parent.mkdir(parents=True)
     package_script.write_text("// new build script\n", encoding="utf-8")
     runtime_script.write_text("// stale build script\n", encoding="utf-8")
     package_vehicle.write_text("vehicle:\n  name: Packaged\n", encoding="utf-8")
     runtime_vehicle.write_text("vehicle:\n  name: UserCar\n", encoding="utf-8")
+    package_default.write_text("report:\n  raw_time_series_appendix: false\n", encoding="utf-8")
+    runtime_default.write_text("report:\n  raw_time_series_appendix: true\n", encoding="utf-8")
+    package_tire.write_text("[MDI_HEADER]\nFILE = stock\n", encoding="utf-8")
+    runtime_tire.write_text("[MDI_HEADER]\nFILE = stale-stock\n", encoding="utf-8")
+    runtime_custom_tire.write_text("[MDI_HEADER]\nFILE = custom\n", encoding="utf-8")
     monkeypatch.setattr(app, "PACKAGE_ROOT", package_root)
 
     app._seed_runtime_root(runtime_root)
 
     assert runtime_script.read_text(encoding="utf-8") == "// new build script\n"
     assert runtime_vehicle.read_text(encoding="utf-8") == "vehicle:\n  name: UserCar\n"
+    assert runtime_default.read_text(encoding="utf-8") == "report:\n  raw_time_series_appendix: false\n"
+    assert runtime_tire.read_text(encoding="utf-8") == "[MDI_HEADER]\nFILE = stock\n"
+    assert runtime_custom_tire.read_text(encoding="utf-8") == "[MDI_HEADER]\nFILE = custom\n"
 
 
 def test_modelica_build_scripts_use_cross_platform_directory_creation() -> None:
@@ -637,6 +654,16 @@ def test_frontend_tire_tools_show_save_update_spinner() -> None:
     assert ".tir-status-row" in styles
     assert ".tir-spinner" in styles
     assert "@keyframes tir-spin" in styles
+
+
+def test_frontend_archive_exposes_delete_action() -> None:
+    app_js = (app.ROOT / "_5_App/static/app.js").read_text(encoding="utf-8")
+    styles = (app.ROOT / "_5_App/static/styles.css").read_text(encoding="utf-8")
+
+    assert "data-delete-result" in app_js
+    assert 'await api("/api/results/delete"' in app_js
+    assert "function deleteSavedResult" in app_js
+    assert ".archive-delete-button" in styles
 
 
 def test_frontend_middle_click_pans_3d_interactive_plots() -> None:
@@ -1157,6 +1184,17 @@ def test_app_can_save_active_simulation_results(tmp_path: Path, monkeypatch: pyt
     sources = app.result_sources_payload("resultcar")["sources"]
     assert [Path(source["path"]).name for source in sources] == ["metrics.csv"]
     assert sources[0]["path"].startswith("_5_App/vehicle_workspaces/resultcar/results/")
+
+    global_result_dir = tmp_path / "_5_App/saved_results" / saved["id"]
+    workspace_result_dir = tmp_path / saved["workspace_result_path"]
+    delete_payload = app.delete_saved_result(saved["id"])
+
+    assert delete_payload["deleted"] == saved["id"]
+    assert delete_payload["results"] == []
+    assert not global_result_dir.exists()
+    assert not workspace_result_dir.exists()
+    assert app.saved_results_payload("resultcar")["results"] == []
+    assert app.result_sources_payload("resultcar")["sources"] == []
 
 
 def test_results_route_is_global_unless_vehicle_key_is_requested(monkeypatch: pytest.MonkeyPatch) -> None:
