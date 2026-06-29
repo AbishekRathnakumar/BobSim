@@ -60,6 +60,19 @@ def test_app_workflow_actions_are_allowlisted() -> None:
         assert not Path(action.argv[0]).is_absolute() or action.argv[0] == app.PYTHON
 
 
+def test_standard_config_fields_expose_sim_tuning_controls() -> None:
+    ramp_fields = {field.path: field for field in app.BASE_CONFIG_SPECS["ramp-steer"].fields}
+    steady_fields = {field.path: field for field in app.BASE_CONFIG_SPECS["steady-state"].fields}
+
+    ramp_cutoff = ("simulation", "init_parameters", "linearityNonlinearityFraction")
+    steady_caps = ("sweep", "maxAyByVelocity")
+
+    assert ramp_fields[ramp_cutoff].group == "Ramp termination"
+    assert ramp_fields[("simulation", "init_parameters", "enableLinearityTermination")].kind == "boolean"
+    assert steady_fields[steady_caps].kind == "json"
+    assert steady_fields[("simulation", "init_parameters", "steadyStateSettleTimeout")].group == "Closed loop"
+
+
 @pytest.mark.parametrize(
     ("argv", "normalized"),
     [

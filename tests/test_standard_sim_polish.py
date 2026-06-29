@@ -328,5 +328,11 @@ def test_steady_state_eval_uses_closed_loop_steady_mode() -> None:
     assert cases
     assert {case["useMode"] for case in cases} == {3}
     assert {case["_mode"] for case in cases} == {"closed_loop_steady_ay"}
-    assert {case["targetAy"] for case in cases} == set(config["sweep"]["targetAys"])
+    cases_by_velocity = {
+        test_vel: [case["targetAy"] for case in cases if case["_testVel"] == test_vel]
+        for test_vel in config["sweep"]["testVels"]
+    }
+    for test_vel, cap in config["sweep"]["maxAyByVelocity"].items():
+        assert max(cases_by_velocity[test_vel]) <= cap
+    assert len(cases) < len(config["sweep"]["testVels"]) * len(config["sweep"]["targetAys"])
     assert max(config["sweep"]["targetAys"]) >= 18.0

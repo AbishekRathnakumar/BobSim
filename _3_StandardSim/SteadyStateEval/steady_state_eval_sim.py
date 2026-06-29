@@ -114,6 +114,58 @@ def _as_float_list(value: Any, *, name: str) -> list[float]:
     raise TypeError(f"{name} must be a scalar or a sequence of scalars.")
 
 
+def _velocity_cap_entries(value: Any, *, name: str) -> list[tuple[float, float]]:
+    if value is None:
+        return []
+
+    entries: list[tuple[float, float]] = []
+    if isinstance(value, dict):
+        raw_items = value.items()
+    elif isinstance(value, (list, tuple, np.ndarray)):
+        raw_items = []
+        for index, item in enumerate(value):
+            if isinstance(item, dict):
+                velocity = _first_not_none(item.get("velocity"), item.get("testVel"), item.get("vel"))
+                cap = _first_not_none(item.get("maxAy"), item.get("targetAyMax"), item.get("cap"))
+                raw_items.append((velocity, cap))
+            elif isinstance(item, (list, tuple, np.ndarray)) and len(item) == 2:
+                raw_items.append((item[0], item[1]))
+            else:
+                raise TypeError(
+                    f"{name}[{index}] must be a mapping with velocity/maxAy values or a two-item sequence."
+                )
+    else:
+        raise TypeError(f"{name} must be a mapping or a sequence of velocity/cap pairs.")
+
+    for velocity, cap in raw_items:
+        velocity_f = float(velocity)
+        cap_f = float(cap)
+        if velocity_f <= 0.0:
+            raise ValueError(f"{name} velocities must be positive.")
+        if cap_f <= 0.0:
+            raise ValueError(f"{name} caps must be positive.")
+        entries.append((velocity_f, cap_f))
+
+    return entries
+
+
+def _velocity_ay_cap(sweep: dict[str, Any], test_vel: float) -> float | None:
+    raw = _first_not_none(
+        sweep.get("maxAyByVelocity"),
+        sweep.get("targetAyMaxByVelocity"),
+        sweep.get("velocityMaxAys"),
+    )
+    entries = _velocity_cap_entries(raw, name="sweep.maxAyByVelocity")
+    if not entries:
+        return None
+
+    test_vel_f = float(test_vel)
+    for velocity, cap in entries:
+        if abs(velocity - test_vel_f) <= 1e-9:
+            return cap
+    return None
+
+
 def _first_not_none(*values: Any) -> Any:
     for value in values:
         if value is not None:
@@ -225,7 +277,8 @@ def _nonlinear_limit_index(
             if eligible[idx] and nonlinearity[idx] >= nonlinearity_fraction:
                 return int(idx), float(nonlinearity[idx]), True
 
-    max_nonlinearity = float(np.nanmax(np.where(eligible, nonlinearity, np.nan)))
+    eligible_nonlinearity = nonlinearity[eligible]
+    max_nonlinearity = float(np.nanmax(eligible_nonlinearity)) if eligible_nonlinearity.size else float("nan")
     if not np.isfinite(max_nonlinearity):
         max_nonlinearity = float(np.nanmax(nonlinearity[finite]))
     return fallback_idx, max_nonlinearity, False
@@ -298,13 +351,25 @@ class SteadyStateEvalSim:
 
         return target_ays
 
+    def _target_ays_for_velocity(self, test_vel: float) -> list[float]:
+        target_ays = self._target_ays_from_sweep()
+        cap = _velocity_ay_cap(self.config["sweep"], test_vel)
+        if cap is None:
+            return target_ays
+
+        capped = [target_ay for target_ay in target_ays if abs(target_ay) <= cap + 1e-9]
+        if not capped:
+            raise ValueError(
+                f"sweep.maxAyByVelocity cap {cap:g} m/s^2 at {test_vel:g} m/s excludes every target a_y."
+            )
+        return capped
+
     def build_cases(self) -> list[dict[str, Any]]:
         sweep = self.config["sweep"]
         sim_cfg = self.config.get("simulation", {})
 
         test_vels_raw = sweep.get("testVels", sweep.get("testVel", 15.0))
         test_vels = _as_float_list(test_vels_raw, name="sweep.testVels")
-        target_ays = self._target_ays_from_sweep()
 
         init_parameters = _as_override_dict(
             sim_cfg.get("init_parameters", {}),
@@ -313,6 +378,7 @@ class SteadyStateEvalSim:
 
         cases: list[dict[str, Any]] = []
         for test_vel in test_vels:
+            target_ays = self._target_ays_for_velocity(test_vel)
             for target_ay in target_ays:
                 case: dict[str, Any] = dict(init_parameters)
                 case.update({
