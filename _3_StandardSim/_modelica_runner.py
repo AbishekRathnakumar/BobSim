@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import json
 import os
 from pathlib import Path
+import time
 from typing import Any
 
 import shutil
@@ -62,6 +64,18 @@ def _first_not_none(*values: Any) -> Any:
             return value
 
     return None
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
 
 
 class ModelicaRunner:
@@ -258,6 +272,7 @@ class ModelicaRunner:
 
     def run_case(self, signals, mode, case, cleanup=False, stream_logs=False):
         run_id = str(uuid.uuid4())[:8]
+        case_label = self._case_label(case)
 
         results_root = self._resolve_run_root()
         run_dir = results_root / f"run_{run_id}"
@@ -266,8 +281,27 @@ class ModelicaRunner:
         override_file = run_dir / "overrides.txt"
         result_file = run_dir / f"{self.exec_name}_res.csv"
         log_file = run_dir / "run.log"
+        manifest_file = run_dir / "manifest.json"
 
         self._write_override_file(override_file, case)
+        self._write_run_manifest(
+            manifest_file,
+            {
+                "run_id": run_id,
+                "case_label": case_label,
+                "status": "running",
+                "started_at": time.time(),
+                "build_dir": str(self.build_dir),
+                "executable": str(self.exe_path),
+                "run_dir": str(run_dir),
+                "override_file": str(override_file),
+                "result_file": str(result_file),
+                "log_file": str(log_file),
+                "mode": mode,
+                "signals": list(signals or []),
+                "case": case,
+            },
+        )
         self._remove_stale_profile_files()
 
         cmd = self._build_command(
@@ -347,11 +381,32 @@ class ModelicaRunner:
         extracted["_run_dir"] = str(run_dir)
         extracted["_result_file"] = str(result_file)
         extracted["_log_file"] = str(log_file)
+        self._write_run_manifest(
+            manifest_file,
+            {
+                "run_id": run_id,
+                "case_label": case_label,
+                "status": "succeeded",
+                "ended_at": time.time(),
+                "build_dir": str(self.build_dir),
+                "executable": str(self.exe_path),
+                "run_dir": str(run_dir),
+                "override_file": str(override_file),
+                "result_file": str(result_file),
+                "log_file": str(log_file),
+                "mode": mode,
+                "signals": list(signals or []),
+                "case": case,
+            },
+        )
 
         if cleanup:
             shutil.rmtree(run_dir, ignore_errors=True)
 
         return extracted
+
+    def _write_run_manifest(self, path: Path, manifest: dict[str, Any]) -> None:
+        path.write_text(json.dumps(_json_ready(manifest), indent=2), encoding="utf-8")
 
     def _resolve_run_root(self) -> Path:
         results_root = self.build_dir / "results"

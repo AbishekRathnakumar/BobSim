@@ -15,7 +15,10 @@ from _5_App.modelica_generator import (
 
 
 def _write_temp_vehicle(repo_root: Path, tmp_path: Path) -> Path:
-    data = load_yaml(repo_root / "vehicle.yml")
+    data = load_yaml(repo_root / "_0_Utils/vehicle_templates/DWBCStabar_DWBCStabarRecord.yml")
+    active_data = load_yaml(repo_root / "vehicle.yml")
+    if isinstance(active_data.get("powertrain"), dict):
+        data["powertrain"] = active_data["powertrain"]
     data["paths"] = {"boblib": "BobLib", "tire_templates": "tires"}
     tire_name = data["aero"].get("tire_template") or data["front"]["tire"]["template"]
     tire_root = tmp_path / "tires"
@@ -58,7 +61,7 @@ def test_modelica_generator_writes_full_boblib_stack(tmp_path: Path) -> None:
     assert "parameter Controllers.VCURecord pVCU(" in record_text
     assert f"tau_max = {vehicle_data['powertrain']['pVCU']['tau_max']}" in record_text
     assert "parameter ElectricDrives.MotorRecord pMotor(" in record_text
-    assert "P_mech_peak = 124000" in record_text
+    assert f"P_mech_peak = {vehicle_data['powertrain']['pMotor']['P_mech_peak']}" in record_text
     assert "parameter Modelica.Units.SI.RotationalSpringConstant pTorsionalStiff = 500000;" in record_text
     assert "FNOMIN = 650" in record_text
     assert "UNLOADED_RADIUS = pFrPartialWheel.R0" in record_text

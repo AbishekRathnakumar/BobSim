@@ -15,7 +15,7 @@ simulation:
 
 execution:
   parallel: false
-  cleanup: true
+  cleanup: false
   stream_logs: false
 
 model_overrides:

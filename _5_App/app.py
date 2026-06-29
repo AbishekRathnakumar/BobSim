@@ -23,6 +23,7 @@ from typing import Any, Iterable
 from urllib.parse import parse_qs, unquote, urlparse
 import uuid
 import re
+import zipfile
 
 import yaml
 
@@ -2754,6 +2755,157 @@ def _result_file_payload(raw_path: str, label: str, kind: str, source_path: str 
     }
 
 
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _workflow_run_target(workflow: WorkflowSpec) -> BuildTargetSpec | None:
+    for action_id in workflow.actions:
+        target = MODELICA_RUN_TARGETS_BY_ACTION.get(action_id)
+        if target:
+            return target
+    return None
+
+
+def _workflow_run_roots(workflow: WorkflowSpec) -> tuple[Path, ...]:
+    target = _workflow_run_target(workflow)
+    if not target:
+        return ()
+    build_dir = _safe_repo_path(target.build_dir)
+    return (build_dir / "results", build_dir / "runs")
+
+
+def _workflow_run_dirs(workflow: WorkflowSpec, *, since: float | None = None) -> list[Path]:
+    run_dirs: dict[Path, Path] = {}
+    min_mtime = (since - 2.0) if since else None
+    for root in _workflow_run_roots(workflow):
+        if not root.is_dir():
+            continue
+        for path in root.glob("run_*"):
+            if not path.is_dir():
+                continue
+            try:
+                file_mtimes = (child.stat().st_mtime for child in path.rglob("*") if child.is_file())
+                mtime = max(file_mtimes, default=path.stat().st_mtime)
+            except OSError:
+                continue
+            if min_mtime is not None and mtime < min_mtime:
+                continue
+            run_dirs[path.resolve()] = path
+    return sorted(run_dirs.values(), key=lambda item: item.stat().st_mtime)
+
+
+def _read_run_manifest(run_dir: Path) -> dict[str, Any]:
+    manifest_path = run_dir / "manifest.json"
+    if manifest_path.is_file():
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {
+        "run_id": run_dir.name.removeprefix("run_"),
+        "case_label": run_dir.name.replace("_", " "),
+        "run_dir": str(run_dir),
+    }
+
+
+def _run_result_csv(run_dir: Path) -> Path | None:
+    candidates = sorted(run_dir.glob("*_res.csv"))
+    if not candidates:
+        candidates = sorted(path for path in run_dir.glob("*.csv") if path.is_file())
+    return candidates[0] if candidates else None
+
+
+def _zip_text(archive: zipfile.ZipFile, arcname: str, text: str) -> None:
+    archive.writestr(arcname, text if text.endswith("\n") else f"{text}\n")
+
+
+def _build_signal_archive(
+    workflow: WorkflowSpec,
+    archive_path: Path,
+    *,
+    since: float | None = None,
+) -> dict[str, Any]:
+    run_dirs = _workflow_run_dirs(workflow, since=since)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    runs: list[dict[str, Any]] = []
+    created_at = time.time()
+
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for index, run_dir in enumerate(run_dirs, start=1):
+            manifest = _read_run_manifest(run_dir)
+            label = str(manifest.get("case_label") or manifest.get("label") or run_dir.name)
+            run_slug = _result_slug(label, run_dir.name)
+            arc_prefix = f"runs/{index:03d}-{run_slug}"
+            result_csv = _run_result_csv(run_dir)
+            run_info = {
+                "index": index,
+                "id": str(manifest.get("run_id") or run_dir.name.removeprefix("run_")),
+                "label": label,
+                "source_dir": run_dir.relative_to(ROOT).as_posix() if run_dir.is_relative_to(ROOT) else str(run_dir),
+                "signals_file": f"{arc_prefix}/signals.csv" if result_csv else None,
+                "description_file": f"{arc_prefix}/description.json",
+                "log_file": f"{arc_prefix}/run.log" if (run_dir / "run.log").is_file() else None,
+                "overrides_file": f"{arc_prefix}/overrides.txt" if (run_dir / "overrides.txt").is_file() else None,
+            }
+            runs.append(run_info)
+
+            if result_csv:
+                archive.write(result_csv, f"{arc_prefix}/signals.csv")
+            for source_name in ("overrides.txt", "run.log"):
+                source = run_dir / source_name
+                if source.is_file():
+                    archive.write(source, f"{arc_prefix}/{source_name}")
+            _zip_text(
+                archive,
+                f"{arc_prefix}/description.json",
+                json.dumps(
+                    {
+                        "workflow": {"id": workflow.id, "label": workflow.label, "group": workflow.group},
+                        "run": run_info,
+                        "manifest": _json_ready(manifest),
+                    },
+                    indent=2,
+                ),
+            )
+
+        archive_manifest = {
+            "workflow": {"id": workflow.id, "label": workflow.label, "group": workflow.group},
+            "created_at": created_at,
+            "created_label": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(created_at)),
+            "run_count": len(runs),
+            "runs": runs,
+        }
+        _zip_text(archive, "manifest.json", json.dumps(archive_manifest, indent=2))
+        if not runs:
+            _zip_text(
+                archive,
+                "README.txt",
+                "No retained Modelica run directories were found for this workflow. "
+                "Run configs must keep execution.cleanup false to include raw per-run signals.",
+            )
+
+    return {
+        "run_count": len(runs),
+        "runs": runs,
+        "archive_path": (
+            archive_path.relative_to(ROOT).as_posix()
+            if archive_path.is_relative_to(ROOT)
+            else str(archive_path)
+        ),
+    }
+
+
 def _result_manifest_payload(path: Path) -> dict[str, Any]:
     manifest = json.loads(path.read_text(encoding="utf-8"))
     files = []
@@ -2800,7 +2952,13 @@ def saved_results_payload(vehicle_key: str | None = None) -> dict[str, Any]:
     return {"vehicle_key": key or _active_vehicle_workspace_key(), "results": results}
 
 
-def save_active_results(workflow_id: str, name: str | None = None) -> dict[str, Any]:
+def save_active_results(
+    workflow_id: str,
+    name: str | None = None,
+    *,
+    since: float | None = None,
+    job_id: str | None = None,
+) -> dict[str, Any]:
     workflow = _workflow_by_id(workflow_id)
     existing_outputs = []
     for output in workflow.outputs:
@@ -2858,6 +3016,39 @@ def save_active_results(workflow_id: str, name: str | None = None) -> dict[str, 
 
     architecture = vehicle_data.get("architecture", {}) if isinstance(vehicle_data, dict) else {}
     vehicle = vehicle_data.get("vehicle", {}) if isinstance(vehicle_data, dict) else {}
+    analysis = _build_signal_archive(workflow, files_dir / "signals.zip", since=since)
+    file_entries.append(
+        {
+            "label": "Signal Archive",
+            "kind": "zip",
+            "source_path": "",
+            "path": (files_dir / "signals.zip").relative_to(ROOT).as_posix(),
+        }
+    )
+    description = {
+        "label": label,
+        "workflow": {"id": workflow.id, "label": workflow.label, "group": workflow.group},
+        "vehicle_name": vehicle.get("name") if isinstance(vehicle, dict) else None,
+        "architecture": architecture if isinstance(architecture, dict) else {},
+        "created_at": created_at,
+        "created_label": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(created_at)),
+        "job_id": job_id,
+        "run_count": analysis["run_count"],
+        "files": [
+            {"label": item["label"], "kind": item["kind"], "source_path": item.get("source_path") or ""}
+            for item in file_entries
+        ],
+    }
+    description_path = files_dir / "run-description.json"
+    description_path.write_text(json.dumps(_json_ready(description), indent=2), encoding="utf-8")
+    file_entries.append(
+        {
+            "label": "Run Description",
+            "kind": "json",
+            "source_path": "",
+            "path": description_path.relative_to(ROOT).as_posix(),
+        }
+    )
     manifest = {
         "id": result_dir.name,
         "label": label,
@@ -2870,6 +3061,8 @@ def save_active_results(workflow_id: str, name: str | None = None) -> dict[str, 
         "architecture": architecture if isinstance(architecture, dict) else {},
         "vehicle_snapshot": vehicle_snapshot,
         "config_snapshot": config_snapshot,
+        "analysis": analysis,
+        "run_count": analysis["run_count"],
         "files": file_entries,
     }
     (result_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -2887,6 +3080,8 @@ def save_active_results(workflow_id: str, name: str | None = None) -> dict[str, 
         workspace_manifest["vehicle_snapshot"] = f"{workspace_rel}/vehicle.yml"
     if config_snapshot:
         workspace_manifest["config_snapshot"] = f"{workspace_rel}/config.yml"
+    if isinstance(workspace_manifest.get("analysis"), dict) and workspace_manifest["analysis"].get("archive_path"):
+        workspace_manifest["analysis"]["archive_path"] = f"{workspace_rel}/files/signals.zip"
     (workspace_result_dir / "manifest.json").write_text(json.dumps(workspace_manifest, indent=2), encoding="utf-8")
     return {
         "saved": _result_manifest_payload(workspace_result_dir / "manifest.json"),
@@ -4293,18 +4488,36 @@ def _run_action_process(action: ActionSpec, job_id: str) -> int:
     return _run_subprocess_action(action, job_id)
 
 
-def run_actions_job(actions: tuple[ActionSpec, ...], job_id: str) -> None:
-    JOBS.update(job_id, status="running", started_at=time.time())
+def run_actions_job(actions: tuple[ActionSpec, ...], job_id: str, workflow_id: str | None = None) -> None:
+    started_at = time.time()
+    JOBS.update(job_id, status="running", started_at=started_at)
     try:
         returncode = 0
         for action in actions:
             returncode = _run_action_process(action, job_id)
             if returncode != 0:
                 break
+        review = None
+        if returncode == 0 and workflow_id:
+            workflow = _workflow_by_id(workflow_id)
+            JOBS.append_log(job_id, "\nPackaging review outputs...\n")
+            try:
+                review_payload = save_active_results(
+                    workflow_id,
+                    f"{workflow.label} review",
+                    since=started_at,
+                    job_id=job_id,
+                )
+                review = review_payload.get("saved")
+                JOBS.append_log(job_id, f"Review package saved: {review.get('label') if review else workflow.label}\n")
+            except Exception as exc:
+                JOBS.append_log(job_id, f"Review package failed: {type(exc).__name__}: {exc}\n")
+                returncode = -1
         JOBS.update(
             job_id,
             status="succeeded" if returncode == 0 else "failed",
             returncode=returncode,
+            review=review,
             ended_at=time.time(),
         )
     except Exception as exc:  # pragma: no cover - defensive job boundary
@@ -4336,7 +4549,7 @@ def start_workflow(workflow_id: str) -> dict[str, Any]:
     label = f"Run {workflow.label}"
     argv = [action.label for action in actions]
     job = JOBS.create(f"workflow:{workflow.id}", label, argv)
-    thread = threading.Thread(target=run_actions_job, args=(actions, job["id"]), daemon=True)
+    thread = threading.Thread(target=run_actions_job, args=(actions, job["id"], workflow.id), daemon=True)
     thread.start()
     return job
 

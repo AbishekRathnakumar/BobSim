@@ -210,6 +210,13 @@ p {
   padding: 0 11px;
 }
 
+a.file-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 .rail-item,
 .ghost-button,
 .run-button,
@@ -3074,7 +3081,7 @@ body.resizing-plot-pane * {
 }
 
 .study-catalog::before {
-  content: "Results";
+  content: "Analysis";
 }
 
 .results-save-actions {
@@ -3089,11 +3096,17 @@ body.resizing-plot-pane * {
 }
 
 .results-catalog::before {
-  content: "Saved Results";
+  content: "Review Packages";
 }
 
 .results-pane {
   grid-template-rows: minmax(170px, 0.32fr) 46px minmax(0, 1fr);
+}
+
+.analysis-workspace .results-pane {
+  grid-template-rows: auto 34px minmax(120px, auto) minmax(0, 1fr);
+  overflow: auto;
+  padding: 12px;
 }
 
 .results-app-pane {
@@ -3853,6 +3866,12 @@ body.resizing-plot-pane * {
   border-radius: 8px;
   padding: 10px;
   background: var(--surface-2);
+}
+
+.output-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .job-item {

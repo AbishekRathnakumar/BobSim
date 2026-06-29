@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import shutil
+import zipfile
 
 import pytest
 import yaml
@@ -747,7 +748,8 @@ def test_app_can_switch_direct_vehicle_to_bellcrank_actuation_defaults(
 
 
 def test_app_can_generate_modelica_payload_from_active_vehicle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    data = yaml.safe_load((app.ROOT / "vehicle.yml").read_text(encoding="utf-8"))
+    template_path = app.ROOT / "_0_Utils/vehicle_templates/DWBCStabar_DWBCStabarRecord.yml"
+    data = yaml.safe_load(template_path.read_text(encoding="utf-8"))
     data["paths"] = {"boblib": "BobLib", "tire_templates": "tires"}
     tire_name = data["aero"].get("tire_template") or data["front"]["tire"]["template"]
     tire_root = tmp_path / "tires"
@@ -1119,8 +1121,19 @@ def test_app_can_save_active_simulation_results(tmp_path: Path, monkeypatch: pyt
     assert saved["label"] == "Baseline Run"
     assert saved["vehicle_name"] == "ResultCar"
     assert saved["architecture"] == {"front": "direct", "rear": "bellcrank"}
-    assert [file["label"] for file in saved["files"]] == ["Report", "Metrics"]
+    assert [file["label"] for file in saved["files"]] == [
+        "Report",
+        "Metrics",
+        "Signal Archive",
+        "Run Description",
+    ]
     assert all((tmp_path / file["path"]).is_file() for file in saved["files"])
+    signal_archive = next(file for file in saved["files"] if file["label"] == "Signal Archive")
+    with zipfile.ZipFile(tmp_path / signal_archive["path"]) as archive:
+        assert "manifest.json" in archive.namelist()
+    run_description = next(file for file in saved["files"] if file["label"] == "Run Description")
+    description = json.loads((tmp_path / run_description["path"]).read_text(encoding="utf-8"))
+    assert description["run_count"] == 0
     assert (tmp_path / saved["vehicle_snapshot"]).is_file()
     assert (tmp_path / saved["config_snapshot"]).is_file()
     assert saved["vehicle_key"] == "resultcar"

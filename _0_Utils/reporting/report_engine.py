@@ -1,8 +1,83 @@
 from pathlib import Path
+import math
+
+import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+import pandas as pd
 
 from _0_Utils.plotting.plot_engine import PlotEngine
 from _0_Utils.reporting.sections import add_summary_page, add_title_page
+
+
+def _case_result_path(case):
+    raw_path = case.get("_result_file") if isinstance(case, dict) else None
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    return path if path.is_file() else None
+
+
+def _case_label(case, index):
+    if not isinstance(case, dict):
+        return f"Run {index}"
+    return str(case.get("_case_label") or case.get("label") or f"Run {index}")
+
+
+def _downsample_frame(frame, max_points):
+    if max_points <= 0 or len(frame) <= max_points:
+        return frame
+    step = max(1, math.ceil(len(frame) / max_points))
+    return frame.iloc[::step, :]
+
+
+def _raw_time_series_frame(path, max_points):
+    data = pd.read_csv(path)
+    if data.empty:
+        return pd.DataFrame(), None, []
+    numeric = data.apply(pd.to_numeric, errors="coerce").dropna(axis=1, how="all")
+    if numeric.empty:
+        return pd.DataFrame(), None, []
+    time_column = next((column for column in ("time", "Time", "t") if column in numeric.columns), None)
+    plot_frame = _downsample_frame(numeric, max_points)
+    signals = [column for column in plot_frame.columns if column != time_column]
+    return plot_frame, time_column, signals
+
+
+def _add_raw_time_series_appendix(pdf, result, config):
+    report_cfg = config.get("report", {})
+    if not report_cfg.get("raw_time_series_appendix", True):
+        return
+    cases = [case for case in result.get("cases", []) if _case_result_path(case)]
+    if not cases:
+        return
+    max_points = int(report_cfg.get("raw_time_series_max_points", 2500))
+    standard = config.get("standard") or report_cfg.get("standard") or "Simulation"
+    print("[report] Rendering raw time-series appendix")
+    for case_index, case in enumerate(cases, start=1):
+        path = _case_result_path(case)
+        if path is None:
+            continue
+        frame, time_column, signals = _raw_time_series_frame(path, max_points)
+        if frame.empty or not signals:
+            continue
+        x = frame[time_column] if time_column else pd.Series(range(len(frame)), index=frame.index)
+        x_label = time_column or "sample"
+        label = _case_label(case, case_index)
+        chunks = [signals[index : index + 4] for index in range(0, len(signals), 4)]
+        for page_index, chunk in enumerate(chunks, start=1):
+            fig, axes = plt.subplots(2, 2, figsize=(11, 8.5), squeeze=False)
+            fig.suptitle(f"{standard} Raw Time Series - {label} ({page_index}/{len(chunks)})", fontsize=12)
+            for axis, signal in zip(axes.ravel(), chunk):
+                axis.plot(x, frame[signal], linewidth=0.8)
+                axis.set_title(str(signal), fontsize=8)
+                axis.set_xlabel(x_label, fontsize=7)
+                axis.tick_params(axis="both", labelsize=7)
+                axis.grid(True, alpha=0.25)
+            for axis in axes.ravel()[len(chunk):]:
+                axis.axis("off")
+            fig.tight_layout(rect=(0, 0, 1, 0.95))
+            pdf.savefig(fig)
+            plt.close(fig)
 
 
 class ReportEngine:
@@ -110,5 +185,7 @@ class ReportEngine:
             if "plots" in self.config:
                 print("[report] Rendering plot pages")
                 PlotEngine(self.config).run(result, pdf)
+
+            _add_raw_time_series_appendix(pdf, result, self.config)
 
         print("[report] Report written")
