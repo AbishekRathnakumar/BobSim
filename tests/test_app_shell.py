@@ -408,6 +408,10 @@ def test_runtime_seed_refreshes_app_owned_paths_and_preserves_user_state(
     runtime_workflow = runtime_root / "_3_StandardSim/FourPostEval/four_post_eval_config.yml"
     runtime_tire = runtime_root / "_0_Utils/tire_templates/stock.tir"
     runtime_custom_tire = runtime_root / "_0_Utils/tire_templates/custom.tir"
+    runtime_build = runtime_root / "_3_StandardSim/BuildBobLib/VehicleSim/old.exe"
+    runtime_archive = runtime_root / "_5_App/build_archive/modelica/vehicle/old/files/old.exe"
+    runtime_saved_result = runtime_root / "_5_App/saved_results/keep/manifest.json"
+    runtime_settings = runtime_root / "_5_App/settings/openmodelica.json"
 
     package_script.parent.mkdir(parents=True)
     runtime_script.parent.mkdir(parents=True)
@@ -417,6 +421,10 @@ def test_runtime_seed_refreshes_app_owned_paths_and_preserves_user_state(
     runtime_workflow.parent.mkdir(parents=True)
     package_tire.parent.mkdir(parents=True)
     runtime_tire.parent.mkdir(parents=True)
+    runtime_build.parent.mkdir(parents=True)
+    runtime_archive.parent.mkdir(parents=True)
+    runtime_saved_result.parent.mkdir(parents=True)
+    runtime_settings.parent.mkdir(parents=True)
     package_script.write_text("// new build script\n", encoding="utf-8")
     runtime_script.write_text("// stale build script\n", encoding="utf-8")
     package_vehicle.write_text("vehicle:\n  name: Packaged\n", encoding="utf-8")
@@ -428,6 +436,10 @@ def test_runtime_seed_refreshes_app_owned_paths_and_preserves_user_state(
     package_tire.write_text("[MDI_HEADER]\nFILE = stock\n", encoding="utf-8")
     runtime_tire.write_text("[MDI_HEADER]\nFILE = stale-stock\n", encoding="utf-8")
     runtime_custom_tire.write_text("[MDI_HEADER]\nFILE = custom\n", encoding="utf-8")
+    runtime_build.write_text("stale build\n", encoding="utf-8")
+    runtime_archive.write_text("stale archive\n", encoding="utf-8")
+    runtime_saved_result.write_text('{"keep": true}\n', encoding="utf-8")
+    runtime_settings.write_text('{"omc_path": "C:/OpenModelica/bin/omc.exe"}\n', encoding="utf-8")
     monkeypatch.setattr(app, "PACKAGE_ROOT", package_root)
 
     app._seed_runtime_root(runtime_root)
@@ -438,6 +450,32 @@ def test_runtime_seed_refreshes_app_owned_paths_and_preserves_user_state(
     assert runtime_workflow.read_text(encoding="utf-8") == "procedure:\n  rollMagnitude: 0.02181661564992912\n"
     assert runtime_tire.read_text(encoding="utf-8") == "[MDI_HEADER]\nFILE = stock\n"
     assert runtime_custom_tire.read_text(encoding="utf-8") == "[MDI_HEADER]\nFILE = custom\n"
+    assert not runtime_build.exists()
+    assert not runtime_archive.exists()
+    assert runtime_saved_result.is_file()
+    assert runtime_settings.is_file()
+    assert (runtime_root / app.APP_RUNTIME_SEED_MANIFEST_PATH).is_file()
+
+
+def test_runtime_seed_preserves_build_cache_when_packaged_sources_are_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "package"
+    runtime_root = tmp_path / "runtime"
+    package_script = package_root / "_3_StandardSim/build_vehicle_sim.mos"
+    runtime_build = runtime_root / "_3_StandardSim/BuildBobLib/VehicleSim/current.exe"
+    package_script.parent.mkdir(parents=True)
+    package_script.write_text("// build script\n", encoding="utf-8")
+    monkeypatch.setattr(app, "PACKAGE_ROOT", package_root)
+
+    app._seed_runtime_root(runtime_root)
+    runtime_build.parent.mkdir(parents=True)
+    runtime_build.write_text("current build\n", encoding="utf-8")
+
+    app._seed_runtime_root(runtime_root)
+
+    assert runtime_build.read_text(encoding="utf-8") == "current build\n"
 
 
 def test_frozen_external_tool_env_removes_pyinstaller_paths(
@@ -949,6 +987,35 @@ def test_app_archives_and_restores_matching_modelica_builds(
     restored = json.loads((build_dir / app.BUILD_METADATA_FILENAME).read_text(encoding="utf-8"))
     assert restored["signature"] == metadata["signature"]
     assert restored["source"] == "archive"
+
+
+def test_modelica_build_signature_changes_when_boblib_source_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app, "ROOT", tmp_path)
+    script_path = tmp_path / "_3_StandardSim/build_vehicle_sim.mos"
+    boblib_package = tmp_path / "_0_Utils/external/BobLib/BobLib/package.mo"
+    script_path.parent.mkdir(parents=True)
+    boblib_package.parent.mkdir(parents=True)
+    script_path.write_text("// fake build script\n", encoding="utf-8")
+    boblib_package.write_text("package BobLib end BobLib;\n", encoding="utf-8")
+    stack = {
+        "written_to_boblib": True,
+        "signatures": {
+            "vehicle": {
+                "generated": "generated-vehicle-signature",
+            }
+        },
+    }
+    target = app.MODELICA_BUILD_TARGETS["vehicle"]
+
+    before = app._modelica_build_signature_payload(target, stack)
+    boblib_package.write_text("package BobLib constant Real changed = 1; end BobLib;\n", encoding="utf-8")
+    after = app._modelica_build_signature_payload(target, stack)
+
+    assert before["modelica_source_digest"] != after["modelica_source_digest"]
+    assert before["signature"] != after["signature"]
 
 
 def test_app_evaluates_active_tire_template_for_ui_curves() -> None:

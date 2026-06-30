@@ -42,6 +42,29 @@ PRIMARY_HOME_ENV = "BOBSIM_HOME"
 LEGACY_HOME_ENV = "BOBDYN_HOME"
 PACKAGE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])).resolve()
 FROZEN_APP = bool(getattr(sys, "frozen", False))
+APP_RUNTIME_SEED_SCHEMA_VERSION = 2
+
+APP_SEED_RUNTIME_PATHS = (
+    "vehicle.yml",
+    "_0_Utils/external/BobLib/BobLib",
+    "_0_Utils/plotting",
+    "_0_Utils/reporting",
+    "_0_Utils/tire_templates",
+    "_0_Utils/vehicle_templates",
+    "_1_VisualSim/visual_templates",
+    "_2_EnvelopeSim/GGV/ggv_config.yml",
+    "_2_EnvelopeSim/YMD/ymd_config.yml",
+    "_2_EnvelopeSim/VehicleReview/vehicle_review_config.yml",
+    "_3_StandardSim/build_vehicle_sim.mos",
+    "_3_StandardSim/build_four_post_sim.mos",
+    "_3_StandardSim/FourPostEval/four_post_eval_config.yml",
+    "_3_StandardSim/RampSteerEval/ramp_steer_eval_config.yml",
+    "_3_StandardSim/SteadyStateEval/steady_state_eval_config.yml",
+    "_3_StandardSim/TransientEval/transient_eval_config.yml",
+    "_4_OptSim/EnvelopeSens/config.yml",
+    "_4_OptSim/StandardSens/configs",
+    "_5_App/sim_configs/_defaults",
+)
 
 
 def _default_runtime_root() -> Path:
@@ -89,6 +112,20 @@ APP_MERGE_RUNTIME_DIRS = {
     "_0_Utils/vehicle_templates",
 }
 
+APP_RUNTIME_SEED_MANIFEST_PATH = Path("_5_App/settings/runtime_seed.json")
+APP_RESET_ON_RUNTIME_SEED_CHANGE_PATHS = (
+    "_3_StandardSim/Build",
+    "_3_StandardSim/BuildBobLib",
+    "_3_StandardSim/generated_results",
+    "_3_StandardSim/results",
+    "_5_App/build_archive/modelica",
+)
+APP_MODELICA_BUILD_FINGERPRINT_PATHS = (
+    "_0_Utils/external/BobLib/BobLib",
+    "_3_StandardSim/build_vehicle_sim.mos",
+    "_3_StandardSim/build_four_post_sim.mos",
+)
+
 
 def _remove_runtime_path(path: Path) -> None:
     if path.is_dir() and not path.is_symlink():
@@ -97,28 +134,68 @@ def _remove_runtime_path(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
-def _seed_runtime_root(runtime_root: Path) -> None:
-    seed_paths = (
-        "vehicle.yml",
-        "_0_Utils/external/BobLib/BobLib",
-        "_0_Utils/plotting",
-        "_0_Utils/reporting",
-        "_0_Utils/tire_templates",
-        "_0_Utils/vehicle_templates",
-        "_1_VisualSim/visual_templates",
-        "_2_EnvelopeSim/GGV/ggv_config.yml",
-        "_2_EnvelopeSim/YMD/ymd_config.yml",
-        "_2_EnvelopeSim/VehicleReview/vehicle_review_config.yml",
-        "_3_StandardSim/build_vehicle_sim.mos",
-        "_3_StandardSim/build_four_post_sim.mos",
-        "_3_StandardSim/FourPostEval/four_post_eval_config.yml",
-        "_3_StandardSim/RampSteerEval/ramp_steer_eval_config.yml",
-        "_3_StandardSim/SteadyStateEval/steady_state_eval_config.yml",
-        "_3_StandardSim/TransientEval/transient_eval_config.yml",
-        "_4_OptSim/EnvelopeSens/config.yml",
-        "_4_OptSim/StandardSens/configs",
-        "_5_App/sim_configs/_defaults",
+def _fingerprint_paths(root: Path, rel_paths: Iterable[str]) -> dict[str, Any]:
+    digest = hashlib.sha256()
+    files: list[str] = []
+    for rel_path in sorted(set(rel_paths)):
+        path = root / rel_path
+        if not path.exists():
+            digest.update(f"missing:{rel_path}\n".encode("utf-8"))
+            continue
+        candidates = [path] if path.is_file() else sorted(item for item in path.rglob("*") if item.is_file())
+        for candidate in candidates:
+            rel = candidate.relative_to(root).as_posix()
+            if _runtime_copy_ignore(str(candidate.parent), [candidate.name]):
+                continue
+            digest.update(f"path:{rel}\n".encode("utf-8"))
+            try:
+                digest.update(candidate.read_bytes())
+            except OSError:
+                digest.update(b"<unreadable>")
+            digest.update(b"\n")
+            files.append(rel)
+    return {
+        "digest": digest.hexdigest(),
+        "file_count": len(files),
+    }
+
+
+def _runtime_seed_manifest() -> dict[str, Any]:
+    fingerprint = _fingerprint_paths(PACKAGE_ROOT, APP_REFRESH_RUNTIME_PATHS)
+    return {
+        "schema": APP_RUNTIME_SEED_SCHEMA_VERSION,
+        "digest": fingerprint["digest"],
+        "file_count": fingerprint["file_count"],
+    }
+
+
+def _read_runtime_seed_manifest(runtime_root: Path) -> dict[str, Any] | None:
+    manifest_path = runtime_root / APP_RUNTIME_SEED_MANIFEST_PATH
+    if not manifest_path.is_file():
+        return None
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _write_runtime_seed_manifest(runtime_root: Path, manifest: dict[str, Any]) -> None:
+    manifest_path = runtime_root / APP_RUNTIME_SEED_MANIFEST_PATH
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
+def _runtime_seed_changed(previous: dict[str, Any] | None, current: dict[str, Any]) -> bool:
+    if not previous:
+        return True
+    return (
+        previous.get("schema") != current.get("schema")
+        or previous.get("digest") != current.get("digest")
     )
+
+
+def _seed_runtime_root(runtime_root: Path) -> None:
     runtime_output_dirs = (
         "_2_EnvelopeSim/Build",
         "_2_EnvelopeSim/results",
@@ -140,7 +217,12 @@ def _seed_runtime_root(runtime_root: Path) -> None:
         "_5_App/vehicle_workspaces",
     )
     runtime_root.mkdir(parents=True, exist_ok=True)
-    for rel_path in seed_paths:
+    current_seed = _runtime_seed_manifest()
+    if _runtime_seed_changed(_read_runtime_seed_manifest(runtime_root), current_seed):
+        for rel_path in APP_RESET_ON_RUNTIME_SEED_CHANGE_PATHS:
+            _remove_runtime_path(runtime_root / rel_path)
+
+    for rel_path in APP_SEED_RUNTIME_PATHS:
         source = PACKAGE_ROOT / rel_path
         target = runtime_root / rel_path
         if not source.exists():
@@ -172,6 +254,7 @@ def _seed_runtime_root(runtime_root: Path) -> None:
             shutil.copy2(source, target)
     for rel_path in runtime_output_dirs:
         (runtime_root / rel_path).mkdir(parents=True, exist_ok=True)
+    _write_runtime_seed_manifest(runtime_root, current_seed)
 
 
 def _prepare_runtime_root() -> Path:
@@ -3738,6 +3821,8 @@ def status_payload() -> dict[str, Any]:
             "frozen": FROZEN_APP,
             "home_env": PRIMARY_HOME_ENV,
             "legacy_home_env": LEGACY_HOME_ENV,
+            "home_override": os.environ.get(PRIMARY_HOME_ENV) or os.environ.get(LEGACY_HOME_ENV) or "",
+            "seed": _runtime_seed_manifest() if FROZEN_APP else None,
         },
         "external_toolchain": external_toolchain_payload(),
         "modelica": modelica,
@@ -4393,13 +4478,16 @@ def _modelica_build_signature_payload(
     script_path = _safe_repo_path(target.script)
     script_text = script_path.read_text(encoding="utf-8", errors="replace")
     host = _host_build_fingerprint()
+    modelica_sources = _fingerprint_paths(ROOT, APP_MODELICA_BUILD_FINGERPRINT_PATHS)
     inputs = {
-        "version": 1,
+        "version": 2,
         "target": target.id,
         "label": target.label,
         "exec_name": target.exec_name,
         "generated_signature": generated,
         "script_sha256": _sha256_text(script_text),
+        "modelica_source_digest": modelica_sources["digest"],
+        "modelica_source_file_count": modelica_sources["file_count"],
         "host": host,
     }
     signature = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode("utf-8")).hexdigest()
@@ -4409,6 +4497,8 @@ def _modelica_build_signature_payload(
         "generated_signature": generated,
         "script_path": target.script,
         "script_sha256": inputs["script_sha256"],
+        "modelica_source_digest": modelica_sources["digest"],
+        "modelica_source_file_count": modelica_sources["file_count"],
         "host": host,
     }
 
