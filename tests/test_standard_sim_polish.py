@@ -11,7 +11,9 @@ import yaml
 from _0_Utils.plotting.plot_types.signal_plot import SignalPlot
 from _0_Utils.reporting.report_engine import _raw_time_series_frame
 from _3_StandardSim.FourPostEval.four_post_eval_sim import (
+    FOUR_POST_DEFAULT_ROLL_MAGNITUDE_RAD,
     FOUR_POST_HEAVE_POSE_COUNT,
+    FOUR_POST_LEGACY_ROLL_MAGNITUDE_RAD,
     FOUR_POST_STOP_TIME_S,
     FourPostEvalSim,
     _normalize_four_post_report_config,
@@ -208,17 +210,24 @@ def test_four_post_report_uses_jacking_antiroll_plot_without_raw_appendix() -> N
 def test_four_post_report_normalizer_disables_raw_appendix_for_legacy_app_data_config() -> None:
     config = {
         "report": {"enabled": True},
+        "procedure": {"rollMagnitude": FOUR_POST_LEGACY_ROLL_MAGNITUDE_RAD},
         "plots": {
             "jacking_roll": {
-                "title": "Geometric Anti-Roll vs Roll",
+                "title": "Anti-Roll Geometry Delta vs Roll",
                 "subplots": [
                     {
-                        "x": {"key": "fr_jacking_vs_roll_x", "label": "Roll (deg)"},
-                        "y": {"key": "fr_anti_vs_roll", "label": "Geometric Anti-Roll (%)"},
+                        "x": {"key": "lltd_vs_roll_x", "label": "Roll (deg)"},
+                        "y": {
+                            "key": "lltd_antiroll_geometry_delta_vs_roll",
+                            "label": "LLTD Delta",
+                        },
                     },
                     {
-                        "x": {"key": "rr_jacking_vs_roll_x", "label": "Roll (deg)"},
-                        "y": {"key": "rr_anti_vs_roll", "label": "Geometric Anti-Roll (%)"},
+                        "x": {"key": "lltd_vs_roll_x", "label": "Roll (deg)"},
+                        "y": {
+                            "key": "lltd_antiroll_geometry_delta_vs_roll",
+                            "label": "LLTD Delta",
+                        },
                     },
                 ],
             }
@@ -229,6 +238,7 @@ def test_four_post_report_normalizer_disables_raw_appendix_for_legacy_app_data_c
     jacking_roll = normalized["plots"]["jacking_roll"]
 
     assert normalized["report"]["raw_time_series_appendix"] is False
+    assert normalized["procedure"]["rollMagnitude"] == pytest.approx(FOUR_POST_DEFAULT_ROLL_MAGNITUDE_RAD)
     assert jacking_roll["title"] == "Geometric Anti-Roll vs Roll"
     assert [subplot["x"]["key"] for subplot in jacking_roll["subplots"]] == [
         "fr_jacking_vs_roll_x",

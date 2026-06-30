@@ -299,7 +299,10 @@ def test_openmodelica_settings_override_omc_and_library_paths(
 
     env: dict[str, str] = {}
     app._apply_openmodelica_env(env)
-    assert env["OPENMODELICAHOME"] == str(home)
+    if app.platform.system() == "Linux":
+        assert "OPENMODELICAHOME" not in env
+    else:
+        assert env["OPENMODELICAHOME"] == str(home)
     assert env["OPENMODELICALIBRARY"] == str(library)
     assert str(library) in env["MODELICAPATH"].split(app.os.pathsep)
 
@@ -333,6 +336,12 @@ def test_deploy_does_not_bundle_generated_modelica_binaries() -> None:
     assert "_5_App/build_archive" not in data_paths
 
 
+def test_deploy_collects_qt_webengine_for_embedded_desktop_window() -> None:
+    assert "PyQt6" in deploy.PYINSTALLER_COLLECT_ALL
+    assert "PyQt6.QtWebEngineCore" in deploy.PYINSTALLER_RUNTIME_HIDDEN_IMPORTS
+    assert "webview.platforms.qt" in deploy.PYINSTALLER_RUNTIME_HIDDEN_IMPORTS
+
+
 def test_deploy_artifacts_are_named_bobsim() -> None:
     assert deploy.APP_NAME == "BobSim"
     assert deploy.DIST_ROOT.name == "BobSim"
@@ -347,10 +356,12 @@ def test_runtime_seed_refreshes_app_owned_paths_and_preserves_user_state(
     package_script = package_root / "_3_StandardSim/build_vehicle_sim.mos"
     package_vehicle = package_root / "vehicle.yml"
     package_default = package_root / "_5_App/sim_configs/_defaults/four-post.yml"
+    package_workflow = package_root / "_3_StandardSim/FourPostEval/four_post_eval_config.yml"
     package_tire = package_root / "_0_Utils/tire_templates/stock.tir"
     runtime_script = runtime_root / "_3_StandardSim/build_vehicle_sim.mos"
     runtime_vehicle = runtime_root / "vehicle.yml"
     runtime_default = runtime_root / "_5_App/sim_configs/_defaults/four-post.yml"
+    runtime_workflow = runtime_root / "_3_StandardSim/FourPostEval/four_post_eval_config.yml"
     runtime_tire = runtime_root / "_0_Utils/tire_templates/stock.tir"
     runtime_custom_tire = runtime_root / "_0_Utils/tire_templates/custom.tir"
 
@@ -358,6 +369,8 @@ def test_runtime_seed_refreshes_app_owned_paths_and_preserves_user_state(
     runtime_script.parent.mkdir(parents=True)
     package_default.parent.mkdir(parents=True)
     runtime_default.parent.mkdir(parents=True)
+    package_workflow.parent.mkdir(parents=True)
+    runtime_workflow.parent.mkdir(parents=True)
     package_tire.parent.mkdir(parents=True)
     runtime_tire.parent.mkdir(parents=True)
     package_script.write_text("// new build script\n", encoding="utf-8")
@@ -366,6 +379,8 @@ def test_runtime_seed_refreshes_app_owned_paths_and_preserves_user_state(
     runtime_vehicle.write_text("vehicle:\n  name: UserCar\n", encoding="utf-8")
     package_default.write_text("report:\n  raw_time_series_appendix: false\n", encoding="utf-8")
     runtime_default.write_text("report:\n  raw_time_series_appendix: true\n", encoding="utf-8")
+    package_workflow.write_text("procedure:\n  rollMagnitude: 0.02181661564992912\n", encoding="utf-8")
+    runtime_workflow.write_text("procedure:\n  rollMagnitude: 0.035\n", encoding="utf-8")
     package_tire.write_text("[MDI_HEADER]\nFILE = stock\n", encoding="utf-8")
     runtime_tire.write_text("[MDI_HEADER]\nFILE = stale-stock\n", encoding="utf-8")
     runtime_custom_tire.write_text("[MDI_HEADER]\nFILE = custom\n", encoding="utf-8")
@@ -376,8 +391,31 @@ def test_runtime_seed_refreshes_app_owned_paths_and_preserves_user_state(
     assert runtime_script.read_text(encoding="utf-8") == "// new build script\n"
     assert runtime_vehicle.read_text(encoding="utf-8") == "vehicle:\n  name: UserCar\n"
     assert runtime_default.read_text(encoding="utf-8") == "report:\n  raw_time_series_appendix: false\n"
+    assert runtime_workflow.read_text(encoding="utf-8") == "procedure:\n  rollMagnitude: 0.02181661564992912\n"
     assert runtime_tire.read_text(encoding="utf-8") == "[MDI_HEADER]\nFILE = stock\n"
     assert runtime_custom_tire.read_text(encoding="utf-8") == "[MDI_HEADER]\nFILE = custom\n"
+
+
+def test_frozen_external_tool_env_removes_pyinstaller_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = tmp_path / "_MEI123"
+    system_lib = tmp_path / "system-lib"
+    bundle.mkdir()
+    system_lib.mkdir()
+    monkeypatch.setattr(app, "FROZEN_APP", True)
+    monkeypatch.setattr(app.sys, "_MEIPASS", str(bundle), raising=False)
+    env = {
+        "LD_LIBRARY_PATH": app.os.pathsep.join([str(bundle), str(tmp_path / "other")]),
+        "LD_LIBRARY_PATH_ORIG": str(system_lib),
+        "PATH": app.os.pathsep.join([str(bundle), str(system_lib)]),
+    }
+
+    app._sanitize_frozen_external_env(env)
+
+    assert env["LD_LIBRARY_PATH"] == str(system_lib)
+    assert env["PATH"] == str(system_lib)
 
 
 def test_modelica_build_scripts_use_cross_platform_directory_creation() -> None:
@@ -664,6 +702,16 @@ def test_frontend_archive_exposes_delete_action() -> None:
     assert 'await api("/api/results/delete"' in app_js
     assert "function deleteSavedResult" in app_js
     assert ".archive-delete-button" in styles
+
+
+def test_frontend_toolchain_selection_uses_omc_and_library_only() -> None:
+    app_js = (app.ROOT / "_5_App/static/app.js").read_text(encoding="utf-8")
+    html = (app.ROOT / "_5_App/static/index.html").read_text(encoding="utf-8")
+
+    assert "toolchain-omc-input" in html
+    assert "toolchain-library-input" in html
+    assert "toolchain-home-input" not in html
+    assert "toolchain-home-input" not in app_js
 
 
 def test_frontend_middle_click_pans_3d_interactive_plots() -> None:

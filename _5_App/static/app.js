@@ -3707,15 +3707,10 @@ function fillToolchainInputsFromStatus() {
   const toolchain = openmodelicaToolchain();
   const settings = toolchain.settings || {};
   const omcInput = document.getElementById("toolchain-omc-input");
-  const homeInput = document.getElementById("toolchain-home-input");
   const libraryInput = document.getElementById("toolchain-library-input");
   if (omcInput) {
     omcInput.value = settings.omc_path || "";
     omcInput.placeholder = toolchain.omc || "Auto-detect omc";
-  }
-  if (homeInput) {
-    homeInput.value = settings.openmodelica_home || "";
-    homeInput.placeholder = toolchain.openmodelica_home || "Infer from omc";
   }
   if (libraryInput) {
     libraryInput.value = settings.library_path || "";
@@ -3783,7 +3778,6 @@ function renderToolchainModal() {
 async function saveOpenModelicaToolchain() {
   const payload = {
     omc_path: document.getElementById("toolchain-omc-input")?.value || "",
-    openmodelica_home: document.getElementById("toolchain-home-input")?.value || "",
     library_path: document.getElementById("toolchain-library-input")?.value || "",
   };
   state.toolchainSaving = true;
@@ -12768,7 +12762,7 @@ function wireEvents() {
   document.getElementById("toolchain-modal").addEventListener("pointerdown", (event) => {
     if (event.target.id === "toolchain-modal") closeModelicaToolchain();
   });
-  ["toolchain-omc-input", "toolchain-home-input", "toolchain-library-input"].forEach((id) => {
+  ["toolchain-omc-input", "toolchain-library-input"].forEach((id) => {
     document.getElementById(id).addEventListener("input", () => {
       state.toolchainInputsDirty = true;
     });

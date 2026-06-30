@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import copy
 import sys
 from pathlib import Path
 from typing import Any, Sequence, cast
@@ -35,6 +36,8 @@ FOUR_POST_RATIO_ABS_LIMIT = 1e4
 FOUR_POST_FRACTION_ABS_LIMIT = 10.0
 FOUR_POST_PERCENT_ABS_LIMIT = 1e3
 FOUR_POST_MOTION_RATIO_ABS_LIMIT = 20.0
+FOUR_POST_DEFAULT_ROLL_MAGNITUDE_RAD = 0.02181661564992912
+FOUR_POST_LEGACY_ROLL_MAGNITUDE_RAD = 0.035
 
 
 FOUR_POST_EVAL_SIGNALS = [
@@ -100,11 +103,41 @@ def load_config(path: str | Path) -> dict[str, Any]:
     return cast(dict[str, Any], config)
 
 
+def _four_post_jacking_roll_plot_config() -> dict[str, Any]:
+    return {
+        "layout": "dual",
+        "title": "Geometric Anti-Roll vs Roll",
+        "subplots": [
+            {
+                "title": "Front",
+                "x": {"key": "fr_jacking_vs_roll_x", "scale": 57.2958, "label": "Roll (deg)"},
+                "y": {"key": "fr_anti_vs_roll", "label": "Geometric Anti-Roll (%)"},
+            },
+            {
+                "title": "Rear",
+                "x": {"key": "rr_jacking_vs_roll_x", "scale": 57.2958, "label": "Roll (deg)"},
+                "y": {"key": "rr_anti_vs_roll", "label": "Geometric Anti-Roll (%)"},
+            },
+        ],
+    }
+
+
 def _normalize_four_post_report_config(config: dict[str, Any]) -> dict[str, Any]:
     """Keep older app-data report configs aligned with current FourPost semantics."""
     report_cfg = config.setdefault("report", {})
     if isinstance(report_cfg, dict):
         report_cfg.setdefault("raw_time_series_appendix", False)
+    procedure_cfg = config.setdefault("procedure", {})
+    if isinstance(procedure_cfg, dict):
+        try:
+            roll_magnitude = float(procedure_cfg.get("rollMagnitude", 0.0))
+        except (TypeError, ValueError):
+            roll_magnitude = float("nan")
+        if np.isclose(roll_magnitude, FOUR_POST_LEGACY_ROLL_MAGNITUDE_RAD):
+            procedure_cfg["rollMagnitude"] = FOUR_POST_DEFAULT_ROLL_MAGNITUDE_RAD
+    plots_cfg = config.setdefault("plots", {})
+    if isinstance(plots_cfg, dict):
+        plots_cfg["jacking_roll"] = copy.deepcopy(_four_post_jacking_roll_plot_config())
     return config
 
 

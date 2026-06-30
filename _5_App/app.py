@@ -75,6 +75,10 @@ APP_REFRESH_RUNTIME_PATHS = {
     "_0_Utils/external/BobLib/BobLib",
     "_0_Utils/plotting",
     "_0_Utils/reporting",
+    "_3_StandardSim/FourPostEval/four_post_eval_config.yml",
+    "_3_StandardSim/RampSteerEval/ramp_steer_eval_config.yml",
+    "_3_StandardSim/SteadyStateEval/steady_state_eval_config.yml",
+    "_3_StandardSim/TransientEval/transient_eval_config.yml",
     "_3_StandardSim/build_vehicle_sim.mos",
     "_3_StandardSim/build_four_post_sim.mos",
     "_5_App/sim_configs/_defaults",
@@ -501,6 +505,50 @@ def _path_list_value(value: str) -> list[str]:
     return [part for part in value.split(os.pathsep) if part.strip()]
 
 
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _strip_env_paths_under(value: str, root: Path) -> str:
+    parts = [part for part in _path_list_value(value) if not _path_is_within(Path(part), root)]
+    return os.pathsep.join(parts)
+
+
+def _sanitize_frozen_external_env(env: dict[str, str]) -> None:
+    """Remove PyInstaller private libraries before launching system tools."""
+    if not FROZEN_APP:
+        return
+    bundle_root_raw = _clean_path_string(getattr(sys, "_MEIPASS", ""))
+    bundle_root = Path(bundle_root_raw) if bundle_root_raw else None
+
+    for key in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
+        original = env.get(f"{key}_ORIG")
+        if original is not None:
+            restored = _strip_env_paths_under(original, bundle_root) if bundle_root else original
+            if restored:
+                env[key] = restored
+            else:
+                env.pop(key, None)
+            continue
+        if bundle_root and env.get(key):
+            cleaned = _strip_env_paths_under(env[key], bundle_root)
+            if cleaned:
+                env[key] = cleaned
+            else:
+                env.pop(key, None)
+
+    if bundle_root and env.get("PATH"):
+        cleaned_path = _strip_env_paths_under(env["PATH"], bundle_root)
+        if cleaned_path:
+            env["PATH"] = cleaned_path
+        else:
+            env.pop("PATH", None)
+
+
 def _dedupe_paths(paths: Iterable[Path]) -> list[Path]:
     seen: set[str] = set()
     deduped: list[Path] = []
@@ -719,6 +767,8 @@ def _resolve_omc_path(settings: dict[str, str], home: str | None = None) -> dict
 def _infer_openmodelica_home(omc_path: str | None) -> str | None:
     if not omc_path:
         return None
+    if platform.system() == "Linux":
+        return None
     path = _user_path(omc_path)
     if path.parent.name.lower() == "bin":
         return str(path.parent.parent)
@@ -864,6 +914,7 @@ def _verify_openmodelica_selection(settings: dict[str, str]) -> dict[str, str]:
         raise ValueError(f"OpenModelica library directory is missing required packages: {missing}")
 
     env = os.environ.copy()
+    _sanitize_frozen_external_env(env)
     _apply_openmodelica_env_paths(env, omc_path=omc_path, home=home_path or None, library=library_path)
     try:
         completed = subprocess.run(
@@ -930,10 +981,6 @@ def _openmodelica_settings_from_payload(payload: dict[str, Any]) -> dict[str, st
     omc = _resolve_omc_path(requested, home_hint)
     if omc.get("path"):
         requested["omc_path"] = str(omc["path"])
-
-    home = _resolve_openmodelica_home(requested, requested.get("omc_path"))
-    if not requested.get("openmodelica_home") and home.get("path") and home.get("exists"):
-        requested["openmodelica_home"] = str(home["path"])
 
     library = _resolve_openmodelica_library(requested, requested.get("openmodelica_home"))
     if not requested.get("library_path") and library.get("path"):
@@ -4620,9 +4667,11 @@ def _run_subprocess_action(action: ActionSpec, job_id: str) -> int:
     env.update(action.env)
     env.setdefault("PYTHONUNBUFFERED", "1")
     _apply_python_stdio_env(env)
+    argv = _action_argv(action)
+    if action.requires_external_toolchain and argv and Path(argv[0]).resolve() != Path(PYTHON).resolve():
+        _sanitize_frozen_external_env(env)
     if action.requires_external_toolchain:
         _apply_openmodelica_env(env)
-    argv = _action_argv(action)
     JOBS.append_log(job_id, f"\n$ {' '.join(argv)}\n")
     with subprocess.Popen(
         argv,

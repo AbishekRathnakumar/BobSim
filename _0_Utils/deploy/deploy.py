@@ -69,6 +69,27 @@ EXCLUDED_MODULES = (
     "vtkmodules",
 )
 
+PYINSTALLER_COLLECT_ALL = (
+    "PyQt6",
+    "qtpy",
+    "webview",
+)
+
+PYINSTALLER_RUNTIME_HIDDEN_IMPORTS = (
+    "PyQt6.QtCore",
+    "PyQt6.QtGui",
+    "PyQt6.QtWidgets",
+    "PyQt6.QtWebEngineCore",
+    "PyQt6.QtWebEngineWidgets",
+    "qtpy",
+    "qtpy.QtCore",
+    "qtpy.QtGui",
+    "qtpy.QtWidgets",
+    "qtpy.QtWebEngineCore",
+    "qtpy.QtWebEngineWidgets",
+    "webview.platforms.qt",
+)
+
 TEXT_SUFFIXES = {
     ".css",
     ".html",
@@ -440,6 +461,12 @@ def build_pyinstaller(mode: str, install_deps: bool, skip_conflict_check: bool) 
 
     for module in EXCLUDED_MODULES:
         cmd.extend(["--exclude-module", module])
+
+    for module in PYINSTALLER_COLLECT_ALL:
+        cmd.extend(["--collect-all", module])
+
+    for module in PYINSTALLER_RUNTIME_HIDDEN_IMPORTS:
+        cmd.extend(["--hidden-import", module])
 
     for rel_path in DATA_PATHS:
         source = ROOT / rel_path
