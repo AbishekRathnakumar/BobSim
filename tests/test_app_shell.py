@@ -478,6 +478,57 @@ def test_runtime_seed_preserves_build_cache_when_packaged_sources_are_unchanged(
     assert runtime_build.read_text(encoding="utf-8") == "current build\n"
 
 
+def test_runtime_seed_does_not_replace_boblib_for_generated_runtime_extras(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root = tmp_path / "package"
+    runtime_root = tmp_path / "runtime"
+    rel_boblib = Path("_0_Utils/external/BobLib/BobLib")
+    stabar_rel = Path("Records/VehicleRecord/Chassis/Suspension/Templates/Stabar/StabarRecord.mo")
+    package_stabar = package_root / rel_boblib / stabar_rel
+    runtime_stabar = runtime_root / rel_boblib / stabar_rel
+    runtime_generated = runtime_root / rel_boblib / "Records/VehicleDefn/GeneratedVehicle.mo"
+    removed: list[Path] = []
+
+    package_stabar.parent.mkdir(parents=True)
+    runtime_stabar.parent.mkdir(parents=True)
+    runtime_generated.parent.mkdir(parents=True)
+    package_stabar.write_text("record StabarRecord\nend StabarRecord;\n", encoding="utf-8")
+    runtime_stabar.write_text("record StabarRecord\nend StabarRecord;\n", encoding="utf-8")
+    runtime_generated.write_text("record GeneratedVehicle\nend GeneratedVehicle;\n", encoding="utf-8")
+    monkeypatch.setattr(app, "PACKAGE_ROOT", package_root)
+
+    original_remove = app._remove_runtime_path
+
+    def tracking_remove(path: Path) -> bool:
+        removed.append(path)
+        return original_remove(path)
+
+    monkeypatch.setattr(app, "_remove_runtime_path", tracking_remove)
+
+    app._seed_runtime_root(runtime_root)
+
+    assert runtime_stabar.is_file()
+    assert runtime_generated.is_file()
+    assert (runtime_root / rel_boblib) not in removed
+
+
+def test_runtime_remove_reports_locked_windows_file_without_crashing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    locked_dir = tmp_path / "locked"
+    locked_dir.mkdir()
+    monkeypatch.setattr(app.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(app.shutil, "rmtree", lambda _path: (_ for _ in ()).throw(PermissionError("locked")))
+    app.RUNTIME_SEED_WARNINGS.clear()
+
+    assert app._remove_runtime_path(locked_dir) is False
+    assert app.RUNTIME_SEED_WARNINGS
+    assert "file is in use" in app.RUNTIME_SEED_WARNINGS[-1]
+
+
 def test_frozen_external_tool_env_removes_pyinstaller_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

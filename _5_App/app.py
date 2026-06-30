@@ -125,13 +125,86 @@ APP_MODELICA_BUILD_FINGERPRINT_PATHS = (
     "_3_StandardSim/build_vehicle_sim.mos",
     "_3_StandardSim/build_four_post_sim.mos",
 )
+RUNTIME_SEED_WARNINGS: list[str] = []
+WINDOWS_LOCKED_FILE_ERRORS = {5, 32, 33}
 
 
-def _remove_runtime_path(path: Path) -> None:
+def _is_locked_file_error(exc: OSError) -> bool:
+    return isinstance(exc, PermissionError) or (
+        platform.system() == "Windows"
+        and getattr(exc, "winerror", None) in WINDOWS_LOCKED_FILE_ERRORS
+    )
+
+
+def _runtime_seed_warning(message: str) -> None:
+    RUNTIME_SEED_WARNINGS.append(message)
+    print(f"Runtime update warning: {message}", file=sys.stderr, flush=True)
+
+
+def _retry_runtime_io(description: str, operation: Any) -> bool:
+    last_error: OSError | None = None
+    for attempt in range(6):
+        try:
+            operation()
+            return True
+        except OSError as exc:
+            if not _is_locked_file_error(exc):
+                raise
+            last_error = exc
+            time.sleep(0.15 * (attempt + 1))
+    _runtime_seed_warning(f"{description} failed because a file is in use: {last_error}")
+    return False
+
+
+def _remove_runtime_path(path: Path) -> bool:
+    if not path.exists() and not path.is_symlink():
+        return True
     if path.is_dir() and not path.is_symlink():
-        shutil.rmtree(path)
-    else:
-        path.unlink(missing_ok=True)
+        return _retry_runtime_io(f"Remove {path}", lambda: shutil.rmtree(path))
+    return _retry_runtime_io(f"Remove {path}", lambda: path.unlink(missing_ok=True))
+
+
+def _copy_runtime_file(source: Path, target: Path) -> bool:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return _retry_runtime_io(f"Copy {source} to {target}", lambda: shutil.copy2(source, target))
+
+
+def _copy_runtime_tree(source: Path, target: Path, *, merge: bool = False) -> bool:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return _retry_runtime_io(
+        f"Copy {source} to {target}",
+        lambda: shutil.copytree(
+            source,
+            target,
+            symlinks=True,
+            ignore=_runtime_copy_ignore,
+            dirs_exist_ok=merge,
+        ),
+    )
+
+
+def _same_file_content(source: Path, target: Path) -> bool:
+    try:
+        return source.read_bytes() == target.read_bytes()
+    except OSError:
+        return False
+
+
+def _source_path_current(source: Path, target: Path) -> bool:
+    if not target.exists():
+        return False
+    if source.is_file():
+        return target.is_file() and _same_file_content(source, target)
+    if not source.is_dir() or not target.is_dir():
+        return False
+
+    for source_file in sorted(item for item in source.rglob("*") if item.is_file()):
+        if _runtime_copy_ignore(str(source_file.parent), [source_file.name]):
+            continue
+        target_file = target / source_file.relative_to(source)
+        if not target_file.is_file() or not _same_file_content(source_file, target_file):
+            return False
+    return True
 
 
 def _fingerprint_paths(root: Path, rel_paths: Iterable[str]) -> dict[str, Any]:
@@ -230,28 +303,26 @@ def _seed_runtime_root(runtime_root: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         refresh = rel_path in APP_REFRESH_RUNTIME_PATHS
         merge = rel_path in APP_MERGE_RUNTIME_DIRS
+        current = _source_path_current(source, target)
         if source.is_dir():
             if target.exists() and not target.is_dir():
-                _remove_runtime_path(target)
-            if refresh and target.exists():
-                _remove_runtime_path(target)
+                if not _remove_runtime_path(target):
+                    continue
+            if refresh and target.exists() and not current:
+                if not _remove_runtime_path(target):
+                    continue
             if target.exists():
                 if merge:
-                    shutil.copytree(
-                        source,
-                        target,
-                        symlinks=True,
-                        ignore=_runtime_copy_ignore,
-                        dirs_exist_ok=True,
-                    )
+                    _copy_runtime_tree(source, target, merge=True)
                 continue
-            shutil.copytree(source, target, symlinks=True, ignore=_runtime_copy_ignore)
+            _copy_runtime_tree(source, target)
         else:
             if target.is_dir():
-                shutil.rmtree(target)
-            if target.exists() and not refresh:
+                if not _remove_runtime_path(target):
+                    continue
+            if target.exists() and (not refresh or current):
                 continue
-            shutil.copy2(source, target)
+            _copy_runtime_file(source, target)
     for rel_path in runtime_output_dirs:
         (runtime_root / rel_path).mkdir(parents=True, exist_ok=True)
     _write_runtime_seed_manifest(runtime_root, current_seed)
@@ -3823,6 +3894,7 @@ def status_payload() -> dict[str, Any]:
             "legacy_home_env": LEGACY_HOME_ENV,
             "home_override": os.environ.get(PRIMARY_HOME_ENV) or os.environ.get(LEGACY_HOME_ENV) or "",
             "seed": _runtime_seed_manifest() if FROZEN_APP else None,
+            "seed_warnings": list(RUNTIME_SEED_WARNINGS),
         },
         "external_toolchain": external_toolchain_payload(),
         "modelica": modelica,
