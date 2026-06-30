@@ -709,6 +709,58 @@ def test_four_post_anti_roll_samples_offset_force_pulses(
     assert np.ptp(series["rr_anti_vs_roll"]) > 0.1
 
 
+def test_four_post_lltd_uses_spring_roll_stiffness_when_arb_is_absent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vehicle = _four_post_unit_vehicle()
+    for axle in ("front", "rear"):
+        side = vehicle[axle]
+        assert isinstance(side, dict)
+        actuation = side["actuation"]
+        assert isinstance(actuation, dict)
+        actuation.pop("stabar", None)
+    monkeypatch.setattr(four_post_eval, "_load_active_vehicle_yaml", lambda: vehicle)
+    config = _four_post_unit_config(tmp_path)
+    model_overrides = config["model_overrides"]
+    assert isinstance(model_overrides, dict)
+    suspension = model_overrides["suspension"]
+    assert isinstance(suspension, dict)
+    front_suspension = suspension["front"]
+    rear_suspension = suspension["rear"]
+    assert isinstance(front_suspension, dict)
+    assert isinstance(rear_suspension, dict)
+    front_suspension["stabar_rate_n_m_per_rad"] = 500.0
+    rear_suspension["stabar_rate_n_m_per_rad"] = 700.0
+    heave_sweep = np.linspace(
+        -0.03,
+        0.03,
+        four_post_eval.FOUR_POST_HEAVE_POSE_COUNT,
+    )
+    roll_sweep_deg = np.linspace(
+        -1.25,
+        1.25,
+        four_post_eval.FOUR_POST_ROLL_POSE_COUNT,
+    )
+
+    summary, series = four_post_eval.FourPostEvalSim(config).summarize(
+        _four_post_result_from_kinematics(vehicle, heave_sweep, roll_sweep_deg)
+    )
+
+    assert summary["arb_roll_stiffness_front_Nm_per_rad"] == pytest.approx(0.0)
+    assert summary["arb_roll_stiffness_rear_Nm_per_rad"] == pytest.approx(0.0)
+    assert summary["elastic_roll_stiffness_front_Nm_per_rad"] == pytest.approx(
+        summary["spring_roll_stiffness_front_Nm_per_rad"]
+    )
+    assert summary["elastic_roll_stiffness_rear_Nm_per_rad"] == pytest.approx(
+        summary["spring_roll_stiffness_rear_Nm_per_rad"]
+    )
+    assert np.isfinite(summary["avg_roll_rate_distribution_front_pct"])
+    assert np.isfinite(summary["avg_lltd_front_pct"])
+    assert np.isfinite(summary["avg_antiroll_geometry_lltd_delta_pct"])
+    assert np.isfinite(series["lltd_stiffness_vs_roll"]).any()
+
+
 def test_kinematic_heave_gains_match_four_post_eval_metrics() -> None:
     metrics_path = ROOT / "_3_StandardSim/results/four_post_eval_report_metrics.csv"
     if not metrics_path.is_file():

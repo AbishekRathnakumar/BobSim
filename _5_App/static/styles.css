@@ -3946,6 +3946,27 @@ body.resizing-plot-pane * {
   border: 0;
 }
 
+.pdf-preview-shell {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 320px;
+}
+
+.pdf-preview-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.pdf-preview-frame {
+  width: 100%;
+  height: min(68vh, 820px);
+  border: 0;
+}
+
 .preview table {
   width: 100%;
   border-collapse: collapse;

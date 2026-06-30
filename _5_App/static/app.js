@@ -5303,6 +5303,21 @@ function isPreviewableFile(kind) {
   return ["pdf", "csv", "text", "json"].includes(String(kind || "").toLowerCase());
 }
 
+function pdfPreviewHtml(path) {
+  const url = fileDownloadUrl(path);
+  return `
+    <div class="pdf-preview-shell">
+      <div class="pdf-preview-actions">
+        <a class="file-button" href="${url}" target="_blank" rel="noreferrer">Open PDF</a>
+        <a class="file-button" href="${url}" download>Download</a>
+      </div>
+      <object class="pdf-preview-frame" data="${url}" type="application/pdf">
+        <iframe src="${url}"></iframe>
+      </object>
+    </div>
+  `;
+}
+
 function outputItem(output) {
   const meta = output.exists ? `${escapeHtml(output.modified_label)} | ${fmtBytes(output.size)}` : "missing";
   const previewButton = output.exists && isPreviewableFile(output.kind)
@@ -5326,7 +5341,7 @@ async function previewFile(path, kind, targetId = "preview") {
   const preview = document.getElementById(targetId);
   if (!preview) return;
   if (kind === "pdf") {
-    preview.innerHTML = `<iframe src="/files/${encodeURIComponent(path)}"></iframe>`;
+    preview.innerHTML = pdfPreviewHtml(path);
     return;
   }
   if (kind === "csv") {

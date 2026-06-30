@@ -106,6 +106,12 @@ def _sanitize_frozen_external_env(env: dict[str, str]) -> None:
             env.pop("PATH", None)
 
 
+def _subprocess_creation_flags() -> int:
+    if sys.platform != "win32":
+        return 0
+    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
 def _first_not_none(*values: Any) -> Any:
     for value in values:
         if value is not None:
@@ -378,6 +384,7 @@ class ModelicaRunner:
                     stderr=subprocess.STDOUT,
                     text=True,
                     timeout=timeout_s,
+                    creationflags=_subprocess_creation_flags(),
                 )
             except subprocess.TimeoutExpired as exc:
                 output = exc.stdout or ""
@@ -473,6 +480,7 @@ class ModelicaRunner:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                creationflags=_subprocess_creation_flags(),
             ) as process:
                 try:
                     stdout, _ = process.communicate(timeout=timeout_s)
@@ -503,6 +511,7 @@ class ModelicaRunner:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            creationflags=_subprocess_creation_flags(),
         ) as process:
             with Path(log_file).open("w") as log:
                 assert process.stdout is not None

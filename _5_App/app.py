@@ -42,7 +42,7 @@ PRIMARY_HOME_ENV = "BOBSIM_HOME"
 LEGACY_HOME_ENV = "BOBDYN_HOME"
 PACKAGE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])).resolve()
 FROZEN_APP = bool(getattr(sys, "frozen", False))
-APP_RUNTIME_SEED_SCHEMA_VERSION = 3
+APP_RUNTIME_SEED_SCHEMA_VERSION = 4
 
 APP_SEED_RUNTIME_PATHS = (
     "vehicle.yml",
@@ -1080,6 +1080,7 @@ def _verify_openmodelica_selection(settings: dict[str, str]) -> dict[str, str]:
             text=True,
             timeout=OPENMODELICA_VERIFY_TIMEOUT_S,
             check=False,
+            creationflags=_subprocess_creation_flags(),
         )
     except subprocess.TimeoutExpired as exc:
         raise ValueError(f"omc verification timed out after {OPENMODELICA_VERIFY_TIMEOUT_S} seconds.") from exc
@@ -4824,6 +4825,12 @@ def _apply_python_stdio_env(env: dict[str, str]) -> None:
     env["PYTHONIOENCODING"] = PYTHON_SUBPROCESS_ENCODING
 
 
+def _subprocess_creation_flags() -> int:
+    if sys.platform != "win32":
+        return 0
+    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
 def _run_subprocess_action(action: ActionSpec, job_id: str) -> int:
     env = os.environ.copy()
     env.update(action.env)
@@ -4845,6 +4852,7 @@ def _run_subprocess_action(action: ActionSpec, job_id: str) -> int:
         encoding="utf-8",
         errors="replace",
         bufsize=1,
+        creationflags=_subprocess_creation_flags(),
     ) as process:
         assert process.stdout is not None
         for line in process.stdout:
@@ -5164,12 +5172,32 @@ class BobSimHandler(BaseHTTPRequestHandler):
     def _send_file(self, path: Path) -> None:
         mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         data = path.read_bytes()
-        self.send_response(HTTPStatus.OK)
+        byte_range: tuple[int, int] | None = None
+        try:
+            byte_range = _parse_byte_range(self.headers.get("Range"), len(data))
+        except ValueError:
+            self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+            self.send_header("Content-Range", f"bytes */{len(data)}")
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+            return
+
+        if byte_range:
+            start, end = byte_range
+            body = data[start : end + 1]
+            self.send_response(HTTPStatus.PARTIAL_CONTENT)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
+        else:
+            body = data
+            self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", mime_type)
-        self.send_header("Content-Length", str(len(data)))
+        if mime_type == "application/pdf":
+            self.send_header("Content-Disposition", f'inline; filename="{path.name}"')
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Accept-Ranges", "bytes")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(data)
+        self.wfile.write(body)
 
 
 def _safe_static_path(raw_path: str) -> Path:
@@ -5184,6 +5212,33 @@ def _query_one(query: str, key: str) -> str:
     if not values:
         raise KeyError(key)
     return values[0]
+
+
+def _parse_byte_range(range_header: str | None, size: int) -> tuple[int, int] | None:
+    if not range_header or not range_header.startswith("bytes=") or size <= 0:
+        return None
+    raw_range = range_header.removeprefix("bytes=").split(",", 1)[0].strip()
+    if "-" not in raw_range:
+        return None
+    start_text, end_text = raw_range.split("-", 1)
+    try:
+        if start_text:
+            start = int(start_text)
+            end = int(end_text) if end_text else size - 1
+        else:
+            suffix_size = int(end_text)
+            if suffix_size <= 0:
+                return None
+            start = max(0, size - suffix_size)
+            end = size - 1
+    except ValueError:
+        return None
+    if start < 0 or start >= size:
+        raise ValueError("Range start is outside the file.")
+    end = min(end, size - 1)
+    if end < start:
+        raise ValueError("Range end is before the range start.")
+    return start, end
 
 
 def run(host: str, port: int) -> None:

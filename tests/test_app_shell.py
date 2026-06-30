@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from _0_Utils.deploy import deploy
+from _3_StandardSim import _modelica_runner
 from _3_StandardSim._modelica_runner import ModelicaRunner
 from _5_App import app
 from _5_App import desktop
@@ -228,6 +229,27 @@ def write_fake_openmodelica_library(library: Path) -> None:
 
 def fake_omc_version_run(*_args: object, **_kwargs: object) -> object:
     return type("Completed", (), {"returncode": 0, "stdout": "OpenModelica v1.26.0\n"})()
+
+
+def test_windows_subprocesses_hide_console_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app.sys, "platform", "win32")
+    monkeypatch.setattr(app.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(_modelica_runner.sys, "platform", "win32")
+    monkeypatch.setattr(_modelica_runner.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+
+    assert app._subprocess_creation_flags() == 0x08000000
+    assert _modelica_runner._subprocess_creation_flags() == 0x08000000
+
+
+def test_file_byte_range_parser_supports_pdf_viewer_requests() -> None:
+    assert app._parse_byte_range("bytes=0-99", 1000) == (0, 99)
+    assert app._parse_byte_range("bytes=900-", 1000) == (900, 999)
+    assert app._parse_byte_range("bytes=-100", 1000) == (900, 999)
+    assert app._parse_byte_range(None, 1000) is None
+    assert app._parse_byte_range("widgets=0-99", 1000) is None
+
+    with pytest.raises(ValueError):
+        app._parse_byte_range("bytes=1000-1100", 1000)
 
 
 def fake_openmodelica_install(
@@ -870,6 +892,17 @@ def test_frontend_archive_exposes_delete_action() -> None:
     assert 'await api("/api/results/delete"' in app_js
     assert "function deleteSavedResult" in app_js
     assert ".archive-delete-button" in styles
+
+
+def test_frontend_pdf_preview_uses_inline_viewer_with_open_fallback() -> None:
+    app_js = (app.ROOT / "_5_App/static/app.js").read_text(encoding="utf-8")
+    styles = (app.ROOT / "_5_App/static/styles.css").read_text(encoding="utf-8")
+
+    assert "function pdfPreviewHtml" in app_js
+    assert "pdf-preview-frame" in app_js
+    assert "Open PDF" in app_js
+    assert ".pdf-preview-actions" in styles
+    assert ".pdf-preview-frame" in styles
 
 
 def test_frontend_toolchain_selection_uses_omc_and_library_only() -> None:

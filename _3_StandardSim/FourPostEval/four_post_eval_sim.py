@@ -250,6 +250,11 @@ def _side_stabar_rate(side: dict[str, Any]) -> float:
     return float(stabar.get("rate_n_m_per_rad", 0.0))
 
 
+def _side_has_stabar(side: dict[str, Any]) -> bool:
+    actuation = _nested_value(side, "actuation")
+    return isinstance(actuation.get("stabar"), dict)
+
+
 def _linearize_spring_table_rate(table: np.ndarray, rate_n_per_m: float) -> np.ndarray:
     table = np.asarray(table, dtype=float).copy()
     table[:, 1] = table[:, 0] * float(rate_n_per_m)
@@ -374,15 +379,23 @@ def _configured_suspension_setup(config: dict[str, Any]) -> dict[str, Any]:
         ("spring_rate_n_per_m", "spring_rate"),
         _spring_rate_at_deflection(rear_vehicle_table, 0.0),
     )
-    front_stabar_rate = _configured_float(
-        front_cfg,
-        ("stabar_rate_n_m_per_rad", "bar_rate_n_m_per_rad", "arb_rate"),
-        _side_stabar_rate(front_side),
+    front_stabar_rate = (
+        _configured_float(
+            front_cfg,
+            ("stabar_rate_n_m_per_rad", "bar_rate_n_m_per_rad", "arb_rate"),
+            _side_stabar_rate(front_side),
+        )
+        if _side_has_stabar(front_side)
+        else 0.0
     )
-    rear_stabar_rate = _configured_float(
-        rear_cfg,
-        ("stabar_rate_n_m_per_rad", "bar_rate_n_m_per_rad", "arb_rate"),
-        _side_stabar_rate(rear_side),
+    rear_stabar_rate = (
+        _configured_float(
+            rear_cfg,
+            ("stabar_rate_n_m_per_rad", "bar_rate_n_m_per_rad", "arb_rate"),
+            _side_stabar_rate(rear_side),
+        )
+        if _side_has_stabar(rear_side)
+        else 0.0
     )
     front_spring_table = _linearize_spring_table_rate(front_vehicle_table, front_spring_rate)
     rear_spring_table = _linearize_spring_table_rate(rear_vehicle_table, rear_spring_rate)
@@ -1509,6 +1522,8 @@ class FourPostEvalSim:
             motion_ratio: np.ndarray,
         ) -> np.ndarray:
             motion_ratio = np.asarray(motion_ratio, dtype=float).reshape(-1)
+            if abs(float(bar_rate)) <= 1e-12:
+                return np.zeros_like(motion_ratio, dtype=float)
             out = np.full_like(motion_ratio, float("nan"), dtype=float)
             mask = (
                 _finite_abs_mask(motion_ratio, FOUR_POST_MOTION_RATIO_ABS_LIMIT)
