@@ -134,6 +134,7 @@ def _ensure_build_dependencies(install_deps: bool) -> None:
     required = {
         "PyInstaller": "PyInstaller",
         "PIL": "Pillow",
+        "qtpy": "qtpy",
         "webview": "pywebview",
         "PyQt6.QtWebEngineCore": "PyQt6-WebEngine",
         "PyQt6.QtWebEngineWidgets": "PyQt6-WebEngine",

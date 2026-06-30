@@ -4,6 +4,7 @@ from contextlib import closing
 import importlib.util
 import multiprocessing
 import os
+from pathlib import Path
 import socket
 import sys
 import threading
@@ -84,9 +85,69 @@ def _preferred_webview_gui() -> Literal["qt"] | None:
     return None
 
 
+def _path_list_value(value: str) -> list[str]:
+    return [part for part in value.split(os.pathsep) if part.strip()]
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _strip_env_paths_under(value: str, root: Path) -> str:
+    parts = [part for part in _path_list_value(value) if not _path_is_within(Path(part), root)]
+    return os.pathsep.join(parts)
+
+
+def _sanitize_frozen_external_env(env: dict[str, str]) -> None:
+    bundle_root_raw = str(getattr(sys, "_MEIPASS", "") or "").strip()
+    if not bundle_root_raw:
+        return
+    bundle_root = Path(bundle_root_raw)
+
+    for key in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
+        original = env.get(f"{key}_ORIG")
+        if original is not None:
+            restored = _strip_env_paths_under(original, bundle_root)
+            if restored:
+                env[key] = restored
+            else:
+                env.pop(key, None)
+            continue
+        if env.get(key):
+            cleaned = _strip_env_paths_under(env[key], bundle_root)
+            if cleaned:
+                env[key] = cleaned
+            else:
+                env.pop(key, None)
+
+    if env.get("PATH"):
+        cleaned_path = _strip_env_paths_under(env["PATH"], bundle_root)
+        if cleaned_path:
+            env["PATH"] = cleaned_path
+        else:
+            env.pop("PATH", None)
+
+
+def _open_external_browser(url: str) -> None:
+    original_env = os.environ.copy()
+    browser_env = original_env.copy()
+    _sanitize_frozen_external_env(browser_env)
+    try:
+        os.environ.clear()
+        os.environ.update(browser_env)
+        webbrowser.open(url)
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+
+
 def _open_browser_and_wait(url: str, server_thread: threading.Thread) -> None:
     print(f"Opening BobSim in your browser: {url}", flush=True)
-    webbrowser.open(url)
+    _open_external_browser(url)
     try:
         while server_thread.is_alive():
             time.sleep(3600)

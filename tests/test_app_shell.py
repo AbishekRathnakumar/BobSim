@@ -128,6 +128,39 @@ def test_desktop_stdio_replaces_unencodable_output(monkeypatch: pytest.MonkeyPat
     assert stderr.calls == [{"encoding": "utf-8", "errors": "replace"}]
 
 
+def test_desktop_browser_fallback_sanitizes_pyinstaller_library_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = tmp_path / "_MEI123"
+    system_lib = tmp_path / "system-lib"
+    bundle.mkdir()
+    system_lib.mkdir()
+    original_ld_path = desktop.os.pathsep.join([str(bundle), str(tmp_path / "other")])
+    captured: dict[str, str] = {}
+
+    monkeypatch.setattr(desktop.sys, "_MEIPASS", str(bundle), raising=False)
+    monkeypatch.setenv("LD_LIBRARY_PATH", original_ld_path)
+    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", str(system_lib))
+    monkeypatch.setenv("PATH", desktop.os.pathsep.join([str(bundle), str(system_lib)]))
+    monkeypatch.setattr(
+        desktop.webbrowser,
+        "open",
+        lambda _url: captured.update(
+            {
+                "LD_LIBRARY_PATH": desktop.os.environ.get("LD_LIBRARY_PATH", ""),
+                "PATH": desktop.os.environ.get("PATH", ""),
+            }
+        ),
+    )
+
+    desktop._open_external_browser("http://127.0.0.1:12345")
+
+    assert captured["LD_LIBRARY_PATH"] == str(system_lib)
+    assert captured["PATH"] == str(system_lib)
+    assert desktop.os.environ["LD_LIBRARY_PATH"] == original_ld_path
+
+
 def test_desktop_reports_missing_openmodelica_without_running_builds(monkeypatch: pytest.MonkeyPatch) -> None:
     clear_openmodelica_settings(monkeypatch)
     monkeypatch.setattr(app, "FROZEN_APP", True)
@@ -338,8 +371,19 @@ def test_deploy_does_not_bundle_generated_modelica_binaries() -> None:
 
 def test_deploy_collects_qt_webengine_for_embedded_desktop_window() -> None:
     assert "PyQt6" in deploy.PYINSTALLER_COLLECT_ALL
+    assert "qtpy" in deploy.PYINSTALLER_COLLECT_ALL
     assert "PyQt6.QtWebEngineCore" in deploy.PYINSTALLER_RUNTIME_HIDDEN_IMPORTS
+    assert "qtpy" in deploy.PYINSTALLER_RUNTIME_HIDDEN_IMPORTS
     assert "webview.platforms.qt" in deploy.PYINSTALLER_RUNTIME_HIDDEN_IMPORTS
+
+
+def test_deploy_preflight_requires_qtpy_for_linux_desktop_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(deploy, "_has_module", lambda module: module != "qtpy")
+
+    with pytest.raises(SystemExit, match="qtpy"):
+        deploy._ensure_build_dependencies(install_deps=False)
 
 
 def test_deploy_artifacts_are_named_bobsim() -> None:

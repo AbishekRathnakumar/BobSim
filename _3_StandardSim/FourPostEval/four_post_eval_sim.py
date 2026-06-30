@@ -462,6 +462,10 @@ def _sprung_corner_loads(vehicle: dict[str, Any]) -> dict[str, tuple[float, floa
     }
 
 
+def _static_contact_load_n(sprung_corner_load_n: float, unsprung_corner_mass_kg: float) -> float:
+    return float(sprung_corner_load_n + unsprung_corner_mass_kg * GRAVITY_MPS2)
+
+
 def _metrics_csv_value(config: dict[str, Any], metric: str) -> float:
     report_cfg = _as_mapping(config.get("report"), name="report")
     metrics_path = Path(str(report_cfg.get("metrics_csv_path", DEFAULT_METRICS_CSV_PATH)))
@@ -921,12 +925,16 @@ class FourPostEvalSim:
                 "left": sprung_mass_kg * axle_fraction * left_fraction * GRAVITY_MPS2,
                 "right": sprung_mass_kg * axle_fraction * right_fraction * GRAVITY_MPS2,
             }
-            static_balance_target_load = float(np.mean(list(axle_sprung_loads.values())))
 
             for corner_name, corner_key in axle["corner_pairs"]:
                 corner_fraction = axle_fraction * (left_fraction if corner_name == "left" else right_fraction)
                 sprung_corner_mass = sprung_mass_kg * corner_fraction
                 sprung_corner_load = float(axle_sprung_loads[corner_name])
+                static_balance_target_load = sprung_corner_load
+                static_contact_load = _static_contact_load_n(
+                    sprung_corner_load,
+                    axle_unsprung_mass,
+                )
 
                 static_mr = _static_motion_ratio(
                     series,
@@ -934,6 +942,11 @@ class FourPostEvalSim:
                     float(summary.get(motion_ratio_key, float("nan"))),
                 )
                 spring_force = static_balance_target_load * static_mr
+                spring_wheel_load = (
+                    spring_force / static_mr
+                    if np.isfinite(static_mr) and abs(static_mr) > 1e-12
+                    else float("nan")
+                )
                 spring_compression_m = _force_to_deflection(axle_spring_table, spring_force)
                 spring_rate = _spring_rate_at_deflection(axle_spring_table, spring_compression_m)
                 wheel_rate = (
@@ -942,13 +955,14 @@ class FourPostEvalSim:
                     else float("nan")
                 )
                 free_length_m = axle_installed_length_m + spring_compression_m
-                static_fz_n = _series_value_at(
+                fixture_static_fz_n = _series_value_at(
                     series,
                     "heave",
                     f"{corner_key}_fz_vs_heave",
                     0.0,
                 )
-                static_fz_error_n = static_fz_n - static_balance_target_load
+                static_fz_n = static_contact_load
+                static_fz_error_n = spring_wheel_load - static_balance_target_load
                 static_fz_error_pct = (
                     100.0 * static_fz_error_n / static_balance_target_load
                     if abs(static_balance_target_load) > 1e-12
@@ -983,9 +997,11 @@ class FourPostEvalSim:
                     "motion_ratio": float(static_mr),
                     "spring_rate_N_per_m": float(spring_rate),
                     "spring_force_N": float(spring_force),
+                    "spring_wheel_load_N": float(spring_wheel_load),
                     "spring_compression_m": float(spring_compression_m),
                     "spring_installed_length_m": float(axle_installed_length_m),
                     "spring_free_length_m": float(free_length_m),
+                    "static_fixture_fz_N": float(fixture_static_fz_n),
                     "static_fz_N": float(static_fz_n),
                     "static_fz_error_N": float(static_fz_error_n),
                     "static_fz_error_pct": float(static_fz_error_pct),

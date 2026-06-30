@@ -14,9 +14,12 @@ class FourPostCornerSummary(TypedDict):
     motion_ratio: float
     spring_rate_N_per_m: float
     spring_force_N: float
+    spring_wheel_load_N: float
     spring_compression_m: float
     spring_installed_length_m: float
     spring_free_length_m: float
+    static_balance_target_load_N: float
+    static_fixture_fz_N: float
     static_fz_N: float
     static_fz_error_N: float
     static_fz_error_pct: float
@@ -153,9 +156,9 @@ def add_four_post_setup_page(
             ("Installed length", "spring_installed_length_m", "mm", "{:.1f}", 1000.0),
             ("Compression", "spring_compression_m", "mm", "{:.1f}", 1000.0),
             ("Free length", "spring_free_length_m", "mm", "{:.1f}", 1000.0),
-            ("Balance target", "static_balance_target_load_N", "N", "{:.1f}", 1.0),
+            ("Spring target", "static_balance_target_load_N", "N", "{:.1f}", 1.0),
             ("Static Fz", "static_fz_N", "N", "{:.1f}", 1.0),
-            ("Fz error", "static_fz_error_N", "N", "{:+.1f}", 1.0),
+            ("Spring target error", "static_fz_error_N", "N", "{:+.1f}", 1.0),
             ("Wheel rate", "wheel_rate_N_per_m", "N/m", "{:.0f}", 1.0),
             ("Sprung freq", "sprung_frequency_hz", "Hz", "{:.2f}", 1.0),
             ("Unsprung freq", "unsprung_frequency_hz", "Hz", "{:.2f}", 1.0),
@@ -458,8 +461,8 @@ def add_knc_summary_page(
 
     y_left = add_section(x_left_label, x_left_val, x_left_unit, y_left,
         "Setup Check", [
-            ("Max Static Fz Error", "static_balance_max_abs_fz_error_n", "N", "{:.1f}"),
-            ("Max Static Fz Error", "static_balance_max_abs_fz_error_pct", "%", "{:.2f}"),
+            ("Max Spring Target Error", "static_balance_max_abs_fz_error_n", "N", "{:.1f}"),
+            ("Max Spring Target Error", "static_balance_max_abs_fz_error_pct", "%", "{:.2f}"),
         ], section_color="#b91c1c")
 
     # ============================================================
