@@ -1157,6 +1157,77 @@ class FourPostEvalSim:
                 samples.append(float(signal[valid_signal][local_index]))
             return np.array(samples, dtype=float)
 
+        def sample_in_window(signal: np.ndarray, center_s: float, half_window_s: float) -> float:
+            signal = _plausible_array(signal)
+            size = min(t.size, signal.size)
+            time = t[:size]
+            signal = signal[:size]
+            valid = np.isfinite(time) & np.isfinite(signal)
+            window = valid & (np.abs(time - center_s) <= half_window_s)
+            if np.any(window):
+                return float(np.nanmedian(signal[window]))
+            if not np.any(valid):
+                return float("nan")
+            local_index = int(np.nanargmin(np.abs(time[valid] - center_s)))
+            return float(signal[valid][local_index])
+
+        def sample_force_pulses(
+            pose_signal: np.ndarray,
+            response_signal: np.ndarray,
+            force_signal: np.ndarray,
+            *,
+            start_s: float,
+            count: int,
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            pose = _plausible_array(pose_signal)
+            response = _plausible_array(response_signal)
+            force = _plausible_array(force_signal)
+            size = min(t.size, pose.size, response.size, force.size)
+            time = t[:size]
+            pose = pose[:size]
+            response = response[:size]
+            force = force[:size]
+            valid_time = np.isfinite(time)
+
+            pose_samples: list[float] = []
+            response_delta_samples: list[float] = []
+            force_samples: list[float] = []
+            for pose_index in range(count):
+                pose_start = start_s + FOUR_POST_POSE_STEP_S * pose_index
+                fallback_pulse_time = pose_start + 1.5
+                tail_time = pose_start + 4.0
+                pulse_window = (
+                    valid_time
+                    & (time >= pose_start + 0.5)
+                    & (time <= pose_start + 2.25)
+                    & np.isfinite(response)
+                )
+                force_window = pulse_window & np.isfinite(force) & (np.abs(force) > 1e-6)
+                selected_index: int | None = None
+                if np.any(force_window):
+                    candidates = np.flatnonzero(force_window)
+                    selected_index = int(candidates[np.nanargmax(np.abs(force[candidates]))])
+
+                if selected_index is None:
+                    pose_pulse = sample_at_times(pose_signal, [fallback_pulse_time])[0]
+                    response_pulse = sample_at_times(response_signal, [fallback_pulse_time])[0]
+                    force_pulse = sample_at_times(force_signal, [fallback_pulse_time])[0]
+                else:
+                    pose_pulse = float(pose[selected_index])
+                    response_pulse = float(response[selected_index])
+                    force_pulse = float(force[selected_index])
+
+                response_tail = sample_in_window(response_signal, tail_time, 0.75)
+                pose_samples.append(pose_pulse)
+                response_delta_samples.append(response_pulse - response_tail)
+                force_samples.append(force_pulse)
+
+            return (
+                np.asarray(pose_samples, dtype=float),
+                np.asarray(response_delta_samples, dtype=float),
+                np.asarray(force_samples, dtype=float),
+            )
+
         def compute_gain(x: np.ndarray, y: np.ndarray) -> float:
             x = _plausible_array(x)
             y = _plausible_array(y)
@@ -1177,13 +1248,8 @@ class FourPostEvalSim:
             # Sample inside the dead region after the load pulse, before the next pose change.
             return [start_s + FOUR_POST_POSE_STEP_S * i + 4.0 for i in range(count)]
 
-        def jack_times(start_s: float, count: int) -> list[float]:
-            return [start_s + FOUR_POST_POSE_STEP_S * i + 1.5 for i in range(count)]
-
         heave_sample_times = pose_sample_times(FOUR_POST_HEAVE_START_S, FOUR_POST_HEAVE_POSE_COUNT)
         roll_sample_times = pose_sample_times(FOUR_POST_ROLL_START_S, FOUR_POST_ROLL_POSE_COUNT)
-        heave_jack_times = jack_times(FOUR_POST_HEAVE_START_S, FOUR_POST_HEAVE_POSE_COUNT)
-        roll_jack_times = jack_times(FOUR_POST_ROLL_START_S, FOUR_POST_ROLL_POSE_COUNT)
 
         signals = {
             "camber": "Gamma",
@@ -1238,34 +1304,39 @@ class FourPostEvalSim:
         # heave/roll force pulse.
         fr_jack = -sig("frKnC", "jackingForce")
         rr_jack = -sig("rrKnC", "jackingForce")
-
-        fr_heave_jack_x = sample_at_times(heave, heave_jack_times)
-        fr_heave_jack_y = sample_at_times(fr_jack, heave_jack_times) - sample_at_times(
-            fr_jack, heave_sample_times
-        )
-        rr_heave_jack_x = sample_at_times(heave, heave_jack_times)
-        rr_heave_jack_y = sample_at_times(rr_jack, heave_jack_times) - sample_at_times(
-            rr_jack, heave_sample_times
-        )
-
-        fr_roll_jack_x = sample_at_times(roll, roll_jack_times)
-        fr_roll_jack_y = sample_at_times(fr_jack, roll_jack_times) - sample_at_times(
-            fr_jack, roll_sample_times
-        )
-        rr_roll_jack_x = sample_at_times(roll, roll_jack_times)
-        rr_roll_jack_y = sample_at_times(rr_jack, roll_jack_times) - sample_at_times(
-            rr_jack, roll_sample_times
-        )
-
         fr_fx = sig("frKnC", "fx")
         rr_fx = sig("rrKnC", "fx")
         fr_fy = sig("frKnC", "fy")
         rr_fy = sig("rrKnC", "fy")
 
-        fr_roll_fy = sample_at_times(fr_fy, roll_jack_times)
-        rr_roll_fy = sample_at_times(rr_fy, roll_jack_times)
-        fr_heave_fx = sample_at_times(fr_fx, heave_jack_times)
-        rr_heave_fx = sample_at_times(rr_fx, heave_jack_times)
+        fr_heave_jack_x, fr_heave_jack_y, fr_heave_fx = sample_force_pulses(
+            heave,
+            fr_jack,
+            fr_fx,
+            start_s=FOUR_POST_HEAVE_START_S,
+            count=FOUR_POST_HEAVE_POSE_COUNT,
+        )
+        rr_heave_jack_x, rr_heave_jack_y, rr_heave_fx = sample_force_pulses(
+            heave,
+            rr_jack,
+            rr_fx,
+            start_s=FOUR_POST_HEAVE_START_S,
+            count=FOUR_POST_HEAVE_POSE_COUNT,
+        )
+        fr_roll_jack_x, fr_roll_jack_y, fr_roll_fy = sample_force_pulses(
+            roll,
+            fr_jack,
+            fr_fy,
+            start_s=FOUR_POST_ROLL_START_S,
+            count=FOUR_POST_ROLL_POSE_COUNT,
+        )
+        rr_roll_jack_x, rr_roll_jack_y, rr_roll_fy = sample_force_pulses(
+            roll,
+            rr_jack,
+            rr_fy,
+            start_s=FOUR_POST_ROLL_START_S,
+            count=FOUR_POST_ROLL_POSE_COUNT,
+        )
         procedure_cfg = _as_mapping(self.config.get("procedure"), name="procedure")
         roll_force_denominator_n = (
             FOUR_POST_FORCE_SAMPLE_FRACTION * abs(float(procedure_cfg.get("forceMagnitude", 1000.0)))

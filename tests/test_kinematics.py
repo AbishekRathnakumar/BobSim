@@ -656,6 +656,59 @@ def test_four_post_anti_roll_uses_commanded_force_when_measured_fy_is_bad(
     assert not np.any(np.abs(series["fr_anti_vs_roll"]) > four_post_eval.FOUR_POST_PERCENT_ABS_LIMIT)
 
 
+def test_four_post_anti_roll_samples_offset_force_pulses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vehicle = _four_post_unit_vehicle()
+    monkeypatch.setattr(four_post_eval, "_load_active_vehicle_yaml", lambda: vehicle)
+    heave_sweep = np.linspace(
+        -0.03,
+        0.03,
+        four_post_eval.FOUR_POST_HEAVE_POSE_COUNT,
+    )
+    roll_sweep_deg = np.linspace(
+        -1.25,
+        1.25,
+        four_post_eval.FOUR_POST_ROLL_POSE_COUNT,
+    )
+    result = _four_post_result_from_kinematics(vehicle, heave_sweep, roll_sweep_deg)
+    roll_jack_times = _jack_times(
+        four_post_eval.FOUR_POST_ROLL_START_S,
+        four_post_eval.FOUR_POST_ROLL_POSE_COUNT,
+    )
+
+    def append_quiet_sample(source_index: int, time_s: float) -> None:
+        for key, values in list(result.items()):
+            value = float(values[source_index])
+            if key.endswith(".fy") or key.endswith(".jackingForce"):
+                value = 0.0
+            result[key] = np.append(values, value)
+        result["time"][-1] = time_s
+
+    for jack_time in roll_jack_times:
+        index = int(np.argmin(np.abs(result["time"] - jack_time)))
+        roll_rad = float(result["frKnC.roll"][index])
+        append_quiet_sample(index, jack_time - 0.1)
+        result["time"][index] = jack_time + 0.4
+        result["frKnC.fy"][index] = 1000.0
+        result["rrKnC.fy"][index] = 1000.0
+        result["frKnC.jackingForce"][index] = -100.0 * roll_rad
+        result["rrKnC.jackingForce"][index] = -120.0 * roll_rad
+
+    order = np.argsort(result["time"])
+    for key in list(result):
+        result[key] = result[key][order]
+
+    _summary, series = four_post_eval.FourPostEvalSim(
+        _four_post_unit_config(tmp_path)
+    ).summarize(result)
+
+    assert len(series["fr_anti_vs_roll"]) == four_post_eval.FOUR_POST_ROLL_POSE_COUNT
+    assert np.ptp(series["fr_anti_vs_roll"]) > 0.1
+    assert np.ptp(series["rr_anti_vs_roll"]) > 0.1
+
+
 def test_kinematic_heave_gains_match_four_post_eval_metrics() -> None:
     metrics_path = ROOT / "_3_StandardSim/results/four_post_eval_report_metrics.csv"
     if not metrics_path.is_file():

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, contextmanager
 import importlib.util
 import multiprocessing
 import os
@@ -132,17 +132,33 @@ def _sanitize_frozen_external_env(env: dict[str, str]) -> None:
             env.pop("PATH", None)
 
 
-def _open_external_browser(url: str) -> None:
+@contextmanager
+def _sanitized_frozen_external_environment():
     original_env = os.environ.copy()
-    browser_env = original_env.copy()
-    _sanitize_frozen_external_env(browser_env)
+    sanitized_env = original_env.copy()
+    _sanitize_frozen_external_env(sanitized_env)
     try:
         os.environ.clear()
-        os.environ.update(browser_env)
-        webbrowser.open(url)
+        os.environ.update(sanitized_env)
+        yield
     finally:
         os.environ.clear()
         os.environ.update(original_env)
+
+
+def _open_external_browser(url: str) -> None:
+    with _sanitized_frozen_external_environment():
+        webbrowser.open(url)
+
+
+def _start_embedded_webview(webview_module, preferred_gui: Literal["qt"] | None) -> None:
+    # QtWebEngine can spawn desktop helper processes while rendering PDFs.
+    # Keep PyInstaller-private libraries out of those system child processes.
+    with _sanitized_frozen_external_environment():
+        if preferred_gui:
+            webview_module.start(gui=preferred_gui)
+        else:
+            webview_module.start()
 
 
 def _open_browser_and_wait(url: str, server_thread: threading.Thread) -> None:
@@ -185,11 +201,7 @@ def main() -> None:
 
     try:
         webview.create_window(APP_TITLE, url, width=1440, height=960, min_size=(1100, 700))
-        preferred_gui = _preferred_webview_gui()
-        if preferred_gui:
-            webview.start(gui=preferred_gui)
-        else:
-            webview.start()
+        _start_embedded_webview(webview, _preferred_webview_gui())
     except Exception as exc:
         print(f"Embedded BobSim window failed to start: {exc}", flush=True)
         _open_browser_and_wait(url, server_thread)

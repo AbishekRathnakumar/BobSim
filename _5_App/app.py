@@ -42,7 +42,7 @@ PRIMARY_HOME_ENV = "BOBSIM_HOME"
 LEGACY_HOME_ENV = "BOBDYN_HOME"
 PACKAGE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])).resolve()
 FROZEN_APP = bool(getattr(sys, "frozen", False))
-APP_RUNTIME_SEED_SCHEMA_VERSION = 2
+APP_RUNTIME_SEED_SCHEMA_VERSION = 3
 
 APP_SEED_RUNTIME_PATHS = (
     "vehicle.yml",

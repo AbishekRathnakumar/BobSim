@@ -161,6 +161,41 @@ def test_desktop_browser_fallback_sanitizes_pyinstaller_library_env(
     assert desktop.os.environ["LD_LIBRARY_PATH"] == original_ld_path
 
 
+def test_desktop_embedded_webview_sanitizes_pyinstaller_library_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = tmp_path / "_MEI123"
+    system_lib = tmp_path / "system-lib"
+    bundle.mkdir()
+    system_lib.mkdir()
+    original_ld_path = desktop.os.pathsep.join([str(bundle), str(tmp_path / "other")])
+    captured: dict[str, str] = {}
+
+    class FakeWebview:
+        @staticmethod
+        def start(**kwargs: object) -> None:
+            captured.update(
+                {
+                    "LD_LIBRARY_PATH": desktop.os.environ.get("LD_LIBRARY_PATH", ""),
+                    "PATH": desktop.os.environ.get("PATH", ""),
+                    "gui": str(kwargs.get("gui")),
+                }
+            )
+
+    monkeypatch.setattr(desktop.sys, "_MEIPASS", str(bundle), raising=False)
+    monkeypatch.setenv("LD_LIBRARY_PATH", original_ld_path)
+    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", str(system_lib))
+    monkeypatch.setenv("PATH", desktop.os.pathsep.join([str(bundle), str(system_lib)]))
+
+    desktop._start_embedded_webview(FakeWebview, "qt")
+
+    assert captured["LD_LIBRARY_PATH"] == str(system_lib)
+    assert captured["PATH"] == str(system_lib)
+    assert captured["gui"] == "qt"
+    assert desktop.os.environ["LD_LIBRARY_PATH"] == original_ld_path
+
+
 def test_desktop_reports_missing_openmodelica_without_running_builds(monkeypatch: pytest.MonkeyPatch) -> None:
     clear_openmodelica_settings(monkeypatch)
     monkeypatch.setattr(app, "FROZEN_APP", True)
