@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import subprocess
 from typing import Any
 
@@ -12,8 +13,13 @@ from _0_Utils.plotting.plot_types.signal_plot import SignalPlot
 from _0_Utils.reporting.report_engine import _raw_time_series_frame
 from _3_StandardSim.FourPostEval.four_post_eval_sim import (
     FOUR_POST_DEFAULT_ROLL_MAGNITUDE_RAD,
+    FOUR_POST_HEAVE_END_S,
     FOUR_POST_HEAVE_POSE_COUNT,
+    FOUR_POST_HEAVE_START_S,
     FOUR_POST_LEGACY_ROLL_MAGNITUDE_RAD,
+    FOUR_POST_POSE_STEP_S,
+    FOUR_POST_ROLL_POSE_COUNT,
+    FOUR_POST_ROLL_START_S,
     FOUR_POST_STOP_TIME_S,
     FourPostEvalSim,
     _normalize_four_post_report_config,
@@ -46,6 +52,28 @@ def _load_yaml(path: Path) -> dict[str, Any]:
         data = yaml.safe_load(f)
     assert isinstance(data, dict)
     return data
+
+
+def _four_post_model_text() -> str:
+    return (
+        ROOT
+        / "_0_Utils/external/BobLib/BobLib/Experiments/Standards/Templates/FourPost/BaseFourPostSim.mo"
+    ).read_text(encoding="utf-8")
+
+
+def _four_post_table(name: str) -> list[tuple[float, float]]:
+    match = re.search(
+        rf"final parameter Real {re.escape(name)}\[:, 2\] = \[(.*?)\];",
+        _four_post_model_text(),
+        flags=re.S,
+    )
+    assert match is not None, name
+    rows: list[tuple[float, float]] = []
+    for raw_row in match.group(1).split(";"):
+        cols = [float(part.strip()) for part in raw_row.split(",")]
+        assert len(cols) == 2
+        rows.append((cols[0], cols[1]))
+    return rows
 
 
 def test_standard_sim_configs_use_internal_numerical_jacobian() -> None:
@@ -185,6 +213,53 @@ def test_four_post_eval_uses_full_symmetric_pose_schedule() -> None:
     assert FOUR_POST_HEAVE_POSE_COUNT == 11
     assert FOUR_POST_STOP_TIME_S == 118.0
     assert FourPostEvalSim(config).build_overrides()["_stopTime"] == pytest.approx(118.0)
+
+
+def test_four_post_model_tables_match_report_sampling_schedule() -> None:
+    text = _four_post_model_text()
+    assert "heaveCommandTable" not in text
+    assert "heaveSource(table = heaveTable)" in text
+
+    heave_table = dict(_four_post_table("heaveTable"))
+    roll_table = dict(_four_post_table("rollTable"))
+    fx_table = dict(_four_post_table("fxTable"))
+    fy_table = dict(_four_post_table("fyTable"))
+
+    assert max(heave_table) == pytest.approx(FOUR_POST_STOP_TIME_S)
+    assert max(roll_table) == pytest.approx(FOUR_POST_STOP_TIME_S)
+    assert max(fx_table) == pytest.approx(FOUR_POST_STOP_TIME_S)
+    assert max(fy_table) == pytest.approx(FOUR_POST_STOP_TIME_S)
+
+    for time_s in range(int(FOUR_POST_HEAVE_END_S), int(FOUR_POST_STOP_TIME_S) + 1):
+        assert heave_table[float(time_s)] == pytest.approx(0.0)
+    for time_s in range(0, int(FOUR_POST_ROLL_START_S)):
+        assert roll_table[float(time_s)] == pytest.approx(0.0)
+
+    heave_sample_times = [
+        FOUR_POST_HEAVE_START_S + FOUR_POST_POSE_STEP_S * index + 4.0
+        for index in range(FOUR_POST_HEAVE_POSE_COUNT)
+    ]
+    roll_sample_times = [
+        FOUR_POST_ROLL_START_S + FOUR_POST_POSE_STEP_S * index + 4.0
+        for index in range(FOUR_POST_ROLL_POSE_COUNT)
+    ]
+    assert [heave_table[time_s] for time_s in heave_sample_times] == pytest.approx(
+        [-1.0, -0.8, -0.6, -0.4, -0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    )
+    assert [roll_table[time_s] for time_s in roll_sample_times] == pytest.approx(
+        [-1.0, -0.8, -0.6, -0.4, -0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    )
+
+    heave_force_peak_times = [
+        FOUR_POST_HEAVE_START_S + FOUR_POST_POSE_STEP_S * index + 1.0
+        for index in range(FOUR_POST_HEAVE_POSE_COUNT)
+    ]
+    roll_force_peak_times = [
+        FOUR_POST_ROLL_START_S + FOUR_POST_POSE_STEP_S * index + 1.0
+        for index in range(FOUR_POST_ROLL_POSE_COUNT)
+    ]
+    assert [fx_table[time_s] for time_s in heave_force_peak_times] == pytest.approx([1.0] * 11)
+    assert [fy_table[time_s] for time_s in roll_force_peak_times] == pytest.approx([1.0] * 11)
 
 
 def test_four_post_report_uses_jacking_antiroll_plot_without_raw_appendix() -> None:

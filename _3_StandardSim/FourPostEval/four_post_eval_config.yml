@@ -7,7 +7,7 @@ simulation:
   # Optional OpenModelica output/integration step size.
   stepSize: 0.5
   output_format: csv
-  log_level: LOG_STATS,LOG_SOLVER,LOG_INIT
+  log_level: LOG_STATS,LOG_SOLVER,LOG_INIT,LOG_STDOUT,LOG_ASSERT
   extra_args:
     - -jacobian=internalNumerical
   no_grid: false

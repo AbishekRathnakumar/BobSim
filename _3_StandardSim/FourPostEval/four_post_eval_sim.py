@@ -348,6 +348,19 @@ def _sort_xy(x: Any, y: Any) -> tuple[np.ndarray, np.ndarray]:
     return x_arr[idx], y_arr[idx]
 
 
+def _has_variation(
+    values: Any,
+    *,
+    min_range_abs: float,
+    max_abs: float = FOUR_POST_SIGNAL_ABS_LIMIT,
+) -> bool:
+    arr = _plausible_array(values, max_abs)
+    finite = arr[np.isfinite(arr)]
+    if finite.size < 2:
+        return False
+    return bool(float(np.nanmax(finite) - np.nanmin(finite)) > float(min_range_abs))
+
+
 def _configured_suspension_setup(config: dict[str, Any]) -> dict[str, Any]:
     vehicle = _load_active_vehicle_yaml()
     front_side = _side_data(vehicle, "front")
@@ -1191,6 +1204,7 @@ class FourPostEvalSim:
             *,
             start_s: float,
             count: int,
+            subtract_tail: bool = True,
         ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             pose = _plausible_array(pose_signal)
             response = _plausible_array(response_signal)
@@ -1222,15 +1236,22 @@ class FourPostEvalSim:
                     selected_index = int(candidates[np.nanargmax(np.abs(force[candidates]))])
 
                 if selected_index is None:
-                    pose_pulse = sample_at_times(pose_signal, [fallback_pulse_time])[0]
-                    response_pulse = sample_at_times(response_signal, [fallback_pulse_time])[0]
-                    force_pulse = sample_at_times(force_signal, [fallback_pulse_time])[0]
+                    if np.any(pulse_window):
+                        candidates = np.flatnonzero(pulse_window)
+                        selected_index = int(candidates[np.nanargmin(np.abs(time[candidates] - fallback_pulse_time))])
+                        pose_pulse = float(pose[selected_index])
+                        response_pulse = float(response[selected_index])
+                        force_pulse = float(force[selected_index]) if np.isfinite(force[selected_index]) else float("nan")
+                    else:
+                        pose_pulse = sample_at_times(pose_signal, [fallback_pulse_time])[0]
+                        response_pulse = float("nan")
+                        force_pulse = sample_at_times(force_signal, [fallback_pulse_time])[0]
                 else:
                     pose_pulse = float(pose[selected_index])
                     response_pulse = float(response[selected_index])
                     force_pulse = float(force[selected_index])
 
-                response_tail = sample_in_window(response_signal, tail_time, 0.75)
+                response_tail = sample_in_window(response_signal, tail_time, 0.75) if subtract_tail else 0.0
                 pose_samples.append(pose_pulse)
                 response_delta_samples.append(response_pulse - response_tail)
                 force_samples.append(force_pulse)
@@ -1350,10 +1371,37 @@ class FourPostEvalSim:
             start_s=FOUR_POST_ROLL_START_S,
             count=FOUR_POST_ROLL_POSE_COUNT,
         )
+        fr_total_fz = corner_signal("frKnC", "fr_l", "Fz") + corner_signal("frKnC", "fr_r", "Fz")
+        rr_total_fz = corner_signal("rrKnC", "rr_l", "Fz") + corner_signal("rrKnC", "rr_r", "Fz")
+        _, fr_roll_fz_delta, _ = sample_force_pulses(
+            roll,
+            fr_total_fz,
+            fr_fy,
+            start_s=FOUR_POST_ROLL_START_S,
+            count=FOUR_POST_ROLL_POSE_COUNT,
+        )
+        _, rr_roll_fz_delta, _ = sample_force_pulses(
+            roll,
+            rr_total_fz,
+            rr_fy,
+            start_s=FOUR_POST_ROLL_START_S,
+            count=FOUR_POST_ROLL_POSE_COUNT,
+        )
         procedure_cfg = _as_mapping(self.config.get("procedure"), name="procedure")
         roll_force_denominator_n = (
             FOUR_POST_FORCE_SAMPLE_FRACTION * abs(float(procedure_cfg.get("forceMagnitude", 1000.0)))
         )
+        min_roll_jacking_variation_n = max(1e-6, 1e-5 * roll_force_denominator_n)
+        if (
+            not _has_variation(fr_roll_jack_y, min_range_abs=min_roll_jacking_variation_n)
+            and _has_variation(fr_roll_fz_delta, min_range_abs=min_roll_jacking_variation_n)
+        ):
+            fr_roll_jack_y = fr_roll_fz_delta
+        if (
+            not _has_variation(rr_roll_jack_y, min_range_abs=min_roll_jacking_variation_n)
+            and _has_variation(rr_roll_fz_delta, min_range_abs=min_roll_jacking_variation_n)
+        ):
+            rr_roll_jack_y = rr_roll_fz_delta
         fr_roll_force_denominator = _force_denominator_series(fr_roll_fy, roll_force_denominator_n)
         rr_roll_force_denominator = _force_denominator_series(rr_roll_fy, roll_force_denominator_n)
 

@@ -709,6 +709,94 @@ def test_four_post_anti_roll_samples_offset_force_pulses(
     assert np.ptp(series["rr_anti_vs_roll"]) > 0.1
 
 
+def test_four_post_anti_roll_uses_direct_roll_jacking_signal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vehicle = _four_post_unit_vehicle()
+    monkeypatch.setattr(four_post_eval, "_load_active_vehicle_yaml", lambda: vehicle)
+    heave_sweep = np.linspace(
+        -0.03,
+        0.03,
+        four_post_eval.FOUR_POST_HEAVE_POSE_COUNT,
+    )
+    roll_sweep_deg = np.linspace(
+        -1.25,
+        1.25,
+        four_post_eval.FOUR_POST_ROLL_POSE_COUNT,
+    )
+    result = _four_post_result_from_kinematics(vehicle, heave_sweep, roll_sweep_deg)
+    roll_jack_times = _jack_times(
+        four_post_eval.FOUR_POST_ROLL_START_S,
+        four_post_eval.FOUR_POST_ROLL_POSE_COUNT,
+    )
+    roll_tail_times = _pose_sample_times(
+        four_post_eval.FOUR_POST_ROLL_START_S,
+        four_post_eval.FOUR_POST_ROLL_POSE_COUNT,
+    )
+
+    for jack_time, tail_time in zip(roll_jack_times, roll_tail_times, strict=True):
+        jack_index = int(np.argmin(np.abs(result["time"] - jack_time)))
+        tail_index = int(np.argmin(np.abs(result["time"] - tail_time)))
+        roll_rad = float(result["frKnC.roll"][jack_index])
+        for prefix, gain in (("frKnC", -100.0), ("rrKnC", -120.0)):
+            jacking_force = gain * roll_rad
+            result[f"{prefix}.jackingForce"][jack_index] = jacking_force
+            result[f"{prefix}.jackingForce"][tail_index] = 0.0
+
+    _summary, series = four_post_eval.FourPostEvalSim(
+        _four_post_unit_config(tmp_path)
+    ).summarize(result)
+
+    assert np.ptp(series["fr_anti_vs_roll"]) > 0.1
+    assert np.ptp(series["rr_anti_vs_roll"]) > 0.1
+
+
+def test_four_post_anti_roll_falls_back_to_measured_fz_delta(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vehicle = _four_post_unit_vehicle()
+    monkeypatch.setattr(four_post_eval, "_load_active_vehicle_yaml", lambda: vehicle)
+    heave_sweep = np.linspace(
+        -0.03,
+        0.03,
+        four_post_eval.FOUR_POST_HEAVE_POSE_COUNT,
+    )
+    roll_sweep_deg = np.linspace(
+        -1.25,
+        1.25,
+        four_post_eval.FOUR_POST_ROLL_POSE_COUNT,
+    )
+    result = _four_post_result_from_kinematics(vehicle, heave_sweep, roll_sweep_deg)
+    roll_jack_times = _jack_times(
+        four_post_eval.FOUR_POST_ROLL_START_S,
+        four_post_eval.FOUR_POST_ROLL_POSE_COUNT,
+    )
+    roll_tail_times = _pose_sample_times(
+        four_post_eval.FOUR_POST_ROLL_START_S,
+        four_post_eval.FOUR_POST_ROLL_POSE_COUNT,
+    )
+
+    for jack_time, tail_time in zip(roll_jack_times, roll_tail_times, strict=True):
+        jack_index = int(np.argmin(np.abs(result["time"] - jack_time)))
+        tail_index = int(np.argmin(np.abs(result["time"] - tail_time)))
+        roll_rad = float(result["frKnC.roll"][jack_index])
+        for prefix, gain in (("frKnC", 100.0), ("rrKnC", 120.0)):
+            result[f"{prefix}.jackingForce"][jack_index] = 1e292
+            fz_delta = gain * roll_rad
+            for side in ("left", "right"):
+                tail_fz = float(result[f"{prefix}.{side}Fz"][tail_index])
+                result[f"{prefix}.{side}Fz"][jack_index] = tail_fz + 0.5 * fz_delta
+
+    _summary, series = four_post_eval.FourPostEvalSim(
+        _four_post_unit_config(tmp_path)
+    ).summarize(result)
+
+    assert np.ptp(series["fr_anti_vs_roll"]) > 0.1
+    assert np.ptp(series["rr_anti_vs_roll"]) > 0.1
+
+
 def test_four_post_lltd_uses_spring_roll_stiffness_when_arb_is_absent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

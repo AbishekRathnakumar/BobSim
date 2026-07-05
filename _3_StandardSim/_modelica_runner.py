@@ -12,6 +12,7 @@ import subprocess
 import sys
 import uuid
 import traceback
+import xml.etree.ElementTree as ET
 
 import numpy as np
 import pandas as pd
@@ -149,6 +150,7 @@ class ModelicaRunner:
 
         if not self.init_xml.exists():
             raise FileNotFoundError(f"Init XML not found: {self.init_xml}")
+        self._init_defaults_cache: dict[str, str] | None = None
 
     @classmethod
     def from_config(cls, config):
@@ -565,6 +567,8 @@ class ModelicaRunner:
             "integrator failed",
             "can't continue",
             "error test failed repeatedly",
+            "failed to solve linear system of equations",
+            "residual norm is inf",
             "desired step to small",
             "##cvode## -",
             "ddassl had repeated error test failures",
@@ -626,14 +630,21 @@ class ModelicaRunner:
         env = os.environ.copy()
         _sanitize_frozen_external_env(env)
         self._ensure_runtime_compat_symlink()
+        runtime_dirs = self._openmodelica_runtime_dirs()
         current_ld_library_path = env.get("LD_LIBRARY_PATH", "")
         ld_library_path_parts = [
             str(self.build_dir),
-            *(str(path) for path in self._openmodelica_runtime_dirs()),
+            *(str(path) for path in runtime_dirs),
         ]
         if current_ld_library_path:
             ld_library_path_parts.append(current_ld_library_path)
         env["LD_LIBRARY_PATH"] = ":".join(ld_library_path_parts)
+        if sys.platform == "win32":
+            current_path = env.get("PATH", "")
+            path_parts = [str(self.build_dir), *(str(path) for path in runtime_dirs)]
+            if current_path:
+                path_parts.append(current_path)
+            env["PATH"] = os.pathsep.join(path_parts)
         return env
 
     def _ensure_runtime_compat_symlink(self) -> None:
@@ -656,14 +667,27 @@ class ModelicaRunner:
             pass
 
     def _openmodelica_runtime_dirs(self) -> list[Path]:
-        return [
-            path
-            for path in (
-                Path("/usr/lib/x86_64-linux-gnu/omc"),
-                Path("/usr/lib/omc"),
-            )
-            if path.exists()
+        candidates: list[Path] = [
+            Path("/usr/lib/x86_64-linux-gnu/omc"),
+            Path("/usr/lib/omc"),
         ]
+        if sys.platform == "win32":
+            roots = [
+                Path(value)
+                for value in (
+                    os.environ.get("OPENMODELICAHOME"),
+                    os.environ.get("OPENMODELICA_HOME"),
+                    r"C:\Program Files\OpenModelica1.26.1-64bit",
+                    r"C:\Program Files\OpenModelica1.25.5-64bit",
+                    r"C:\Program Files\OpenModelica1.25.4-64bit",
+                    r"C:\Program Files\OpenModelica1.25.0-64bit",
+                )
+                if value
+            ]
+            for root in roots:
+                candidates.extend((root / "bin", root / "lib" / "omc", root / "lib"))
+
+        return [path for path in dict.fromkeys(candidates) if path.exists()]
 
     def _remove_stale_profile_files(self) -> None:
         profile_prefix = f"{self.exec_name}_prof."
@@ -695,6 +719,7 @@ class ModelicaRunner:
         return result
 
     def _write_override_file(self, path, case):
+        init_defaults = self._init_parameter_defaults()
         with Path(path).open("w", newline="\n") as f:
             for key, value in case.items():
                 # Python-only metadata. Keep in result dict, but do not pass to OM.
@@ -707,8 +732,52 @@ class ModelicaRunner:
                     continue
 
                 modelica_key = MODELICA_OVERRIDE_ALIASES.get(key, key)
-                value = self._format_override_value(value)
-                f.write(f"{modelica_key}={value}\n")
+                formatted_value = self._format_override_value(value)
+                if init_defaults is not None:
+                    default_value = init_defaults.get(modelica_key)
+                    if default_value is None:
+                        continue
+                    if self._override_matches_default(formatted_value, default_value):
+                        continue
+                f.write(f"{modelica_key}={formatted_value}\n")
+
+    def _init_parameter_defaults(self) -> dict[str, str] | None:
+        if not hasattr(self, "init_xml"):
+            return None
+        if not hasattr(self, "_init_defaults_cache"):
+            self._init_defaults_cache = None
+        if self._init_defaults_cache is not None:
+            return self._init_defaults_cache
+        if not self.init_xml.exists():
+            return None
+
+        defaults: dict[str, str] = {}
+        root = ET.parse(self.init_xml).getroot()
+        for variable in root.iter("ScalarVariable"):
+            name = variable.attrib.get("name")
+            if not name:
+                continue
+            value_node = next(iter(variable), None)
+            if value_node is None:
+                continue
+            start = value_node.attrib.get("start")
+            if start is not None:
+                defaults[name] = start
+
+        self._init_defaults_cache = defaults
+        return defaults
+
+    def _override_matches_default(self, override_value: str, default_value: str) -> bool:
+        override = override_value.strip()
+        default = default_value.strip()
+
+        if override.lower() in {"true", "false"} or default.lower() in {"true", "false"}:
+            return override.lower() == default.lower()
+
+        try:
+            return bool(np.isclose(float(override), float(default), rtol=0.0, atol=0.0))
+        except ValueError:
+            return override == default
 
     def _format_override_value(self, value):
         if isinstance(value, bool):
