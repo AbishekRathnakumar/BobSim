@@ -1241,7 +1241,11 @@ class FourPostEvalSim:
                         selected_index = int(candidates[np.nanargmin(np.abs(time[candidates] - fallback_pulse_time))])
                         pose_pulse = float(pose[selected_index])
                         response_pulse = float(response[selected_index])
-                        force_pulse = float(force[selected_index]) if np.isfinite(force[selected_index]) else float("nan")
+                        force_pulse = (
+                            float(force[selected_index])
+                            if np.isfinite(force[selected_index])
+                            else float("nan")
+                        )
                     else:
                         pose_pulse = sample_at_times(pose_signal, [fallback_pulse_time])[0]
                         response_pulse = float("nan")
