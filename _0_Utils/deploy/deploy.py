@@ -17,6 +17,11 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from _5_App import storage as app_storage  # noqa: E402
+
 APP_NAME = "BobSim"
 DEPLOY_ROOT = ROOT / "_0_Utils" / "deploy"
 DIST_ROOT = DEPLOY_ROOT / "dist" / APP_NAME
@@ -225,9 +230,7 @@ def _iter_conflict_check_files() -> Iterable[Path]:
                 ("_3_StandardSim", "BuildBobLib"),
                 ("_3_StandardSim", "generated_results"),
                 ("_3_StandardSim", "results"),
-                ("_5_App", "saved_results"),
-                ("_5_App", "vehicle_workspaces"),
-                ("_5_App", "build_archive"),
+                ("_5_App", "user_data"),
             }:
                 continue
             if rel_parts[:3] in {
@@ -317,10 +320,7 @@ def clean_generated_artifacts(include_deploy: bool = True) -> None:
         _remove_path(ROOT / path)
 
     for path in (
-        "_5_App/build_archive",
-        "_5_App/saved_results",
-        "_5_App/settings",
-        "_5_App/vehicle_workspaces",
+        *(item.as_posix() for item in app_storage.USER_DATA_DIRS),
         "_1_VisualSim/results",
         "_2_EnvelopeSim/Build",
         "_2_EnvelopeSim/results",
@@ -338,7 +338,6 @@ def clean_generated_artifacts(include_deploy: bool = True) -> None:
         _clean_directory_contents(ROOT / path)
 
     _clean_directory_contents(ROOT / "_5_App" / "sim_configs", keep={".gitkeep", "_defaults"})
-    _clean_directory_contents(ROOT / "_5_App" / "vehicle_configs")
 
     for visual_artifact in (ROOT / "_1_VisualSim").glob("*_visual.npz"):
         _remove_path(visual_artifact)

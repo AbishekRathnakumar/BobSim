@@ -423,7 +423,7 @@ def test_deploy_does_not_bundle_generated_modelica_binaries() -> None:
     assert "_3_StandardSim/build_vehicle_sim.mos" in data_paths
     assert "_3_StandardSim/build_four_post_sim.mos" in data_paths
     assert "_3_StandardSim/BuildBobLib" not in data_paths
-    assert "_5_App/build_archive" not in data_paths
+    assert app.BUILD_ARCHIVE_ROOT.as_posix() not in data_paths
 
 
 def test_deploy_collects_qt_webengine_for_embedded_desktop_window() -> None:
@@ -466,9 +466,9 @@ def test_runtime_seed_refreshes_app_owned_paths_and_preserves_user_state(
     runtime_tire = runtime_root / "_0_Utils/tire_templates/stock.tir"
     runtime_custom_tire = runtime_root / "_0_Utils/tire_templates/custom.tir"
     runtime_build = runtime_root / "_3_StandardSim/BuildBobLib/VehicleSim/old.exe"
-    runtime_archive = runtime_root / "_5_App/build_archive/modelica/vehicle/old/files/old.exe"
-    runtime_saved_result = runtime_root / "_5_App/saved_results/keep/manifest.json"
-    runtime_settings = runtime_root / "_5_App/settings/openmodelica.json"
+    runtime_archive = runtime_root / app.MODELICA_BUILD_CACHE_ROOT / "vehicle/old/files/old.exe"
+    runtime_saved_result = runtime_root / app.SAVED_RESULTS_ROOT / "keep/manifest.json"
+    runtime_settings = runtime_root / app.OPENMODELICA_SETTINGS_PATH
 
     package_script.parent.mkdir(parents=True)
     runtime_script.parent.mkdir(parents=True)
@@ -1095,7 +1095,7 @@ def test_app_archives_and_restores_matching_modelica_builds(
     assert app._run_action_process(app.ACTION_SPECS["build-vehicle"], job["id"]) == 0
     assert calls["count"] == 1
     metadata = json.loads((build_dir / app.BUILD_METADATA_FILENAME).read_text(encoding="utf-8"))
-    archive_dir = tmp_path / "_5_App/build_archive/modelica/vehicle" / metadata["signature"]
+    archive_dir = tmp_path / app.MODELICA_BUILD_CACHE_ROOT / "vehicle" / metadata["signature"]
     assert (archive_dir / "files" / target.exec_name).is_file()
     assert (archive_dir / "files" / f"{target.exec_name}_init.xml").is_file()
 
@@ -1292,7 +1292,7 @@ def test_app_can_save_and_load_named_vehicle_configs(tmp_path: Path, monkeypatch
     saved = library["saved"]
     assert saved["id"] == "saved:my-saved-vehicle"
     assert any(vehicle["id"] == saved["id"] for vehicle in library["vehicles"])
-    workspace_vehicle = tmp_path / "_5_App/vehicle_workspaces/my-saved-vehicle/config/vehicle.yml"
+    workspace_vehicle = tmp_path / app.VEHICLE_WORKSPACE_ROOT / "my-saved-vehicle/config/vehicle.yml"
     assert workspace_vehicle.is_file()
     assert library["workspace"]["key"] == "my-saved-vehicle"
     assert library["workspace"]["config"]["exists"] is True
@@ -1304,7 +1304,7 @@ def test_app_can_save_and_load_named_vehicle_configs(tmp_path: Path, monkeypatch
     assert yaml.safe_load(active.read_text(encoding="utf-8"))["vehicle"]["name"] == "ActiveVehicle"
 
     library = app.delete_saved_vehicle("saved:my-saved-vehicle")
-    assert not (tmp_path / "_5_App/vehicle_configs/my-saved-vehicle.yml").exists()
+    assert not (tmp_path / app.SAVED_VEHICLE_ROOT / "my-saved-vehicle.yml").exists()
     assert all(vehicle["id"] != "saved:my-saved-vehicle" for vehicle in library["vehicles"])
     with pytest.raises(ValueError):
         app.delete_saved_vehicle("template:TemplateVehicle")
@@ -1320,7 +1320,6 @@ def test_app_can_save_load_and_delete_sim_configs(tmp_path: Path, monkeypatch: p
         encoding="utf-8",
     )
     monkeypatch.setattr(app, "ROOT", tmp_path)
-    monkeypatch.setattr(app, "SAVED_SIM_CONFIG_ROOT", Path("_5_App/sim_configs"))
     monkeypatch.setattr(
         app,
         "BASE_CONFIG_SPECS",
@@ -1364,7 +1363,6 @@ def test_app_can_save_load_and_delete_study_configs(tmp_path: Path, monkeypatch:
         encoding="utf-8",
     )
     monkeypatch.setattr(app, "ROOT", tmp_path)
-    monkeypatch.setattr(app, "SAVED_SIM_CONFIG_ROOT", Path("_5_App/sim_configs"))
     monkeypatch.setattr(
         app,
         "BASE_CONFIG_SPECS",
@@ -1414,7 +1412,6 @@ def test_app_can_save_active_simulation_results(tmp_path: Path, monkeypatch: pyt
     (results_dir / "report.pdf").write_bytes(b"%PDF demo")
     (results_dir / "metrics.csv").write_text("name,value\nscore,1\n", encoding="utf-8")
     monkeypatch.setattr(app, "ROOT", tmp_path)
-    monkeypatch.setattr(app, "SAVED_RESULTS_ROOT", Path("_5_App/saved_results"))
     monkeypatch.setattr(
         app,
         "WORKFLOWS",
@@ -1461,9 +1458,9 @@ def test_app_can_save_active_simulation_results(tmp_path: Path, monkeypatch: pyt
 
     sources = app.result_sources_payload("resultcar")["sources"]
     assert [Path(source["path"]).name for source in sources] == ["metrics.csv"]
-    assert sources[0]["path"].startswith("_5_App/vehicle_workspaces/resultcar/results/")
+    assert sources[0]["path"].startswith(f"{app.VEHICLE_WORKSPACE_ROOT.as_posix()}/resultcar/results/")
 
-    global_result_dir = tmp_path / "_5_App/saved_results" / saved["id"]
+    global_result_dir = tmp_path / app.SAVED_RESULTS_ROOT / saved["id"]
     workspace_result_dir = tmp_path / saved["workspace_result_path"]
     delete_payload = app.delete_saved_result(saved["id"])
 
@@ -1511,7 +1508,6 @@ def test_app_can_explore_result_csv_sources(tmp_path: Path, monkeypatch: pytest.
         encoding="utf-8",
     )
     monkeypatch.setattr(app, "ROOT", tmp_path)
-    monkeypatch.setattr(app, "SAVED_RESULTS_ROOT", Path("_5_App/saved_results"))
 
     sources = app.result_sources_payload()["sources"]
     assert [source["path"] for source in sources] == ["_3_StandardSim/results/raw_trace.csv"]
@@ -1538,7 +1534,7 @@ def test_app_can_add_and_remove_vehicle_processing_workflows(
         "  name: ProcessingCar\n",
         encoding="utf-8",
     )
-    source_dir = tmp_path / "_5_App/vehicle_workspaces/processingcar/results/run-1/files"
+    source_dir = tmp_path / app.VEHICLE_WORKSPACE_ROOT / "processingcar/results/run-1/files"
     source_dir.mkdir(parents=True)
     source = source_dir / "trace.csv"
     source.write_text("time,ay,roll\n0,0,0\n1,1.2,0.03\n", encoding="utf-8")
@@ -1548,7 +1544,7 @@ def test_app_can_add_and_remove_vehicle_processing_workflows(
         {
             "vehicle_key": "processingcar",
             "label": "Corner balance export",
-            "source_path": "_5_App/vehicle_workspaces/processingcar/results/run-1/files/trace.csv",
+            "source_path": f"{app.VEHICLE_WORKSPACE_ROOT.as_posix()}/processingcar/results/run-1/files/trace.csv",
             "signals": ["ay", "roll"],
             "output_name": "corner-balance.csv",
         }
@@ -1558,7 +1554,7 @@ def test_app_can_add_and_remove_vehicle_processing_workflows(
     assert workflow["id"] == "corner-balance-export"
     assert workflow["source"]["exists"] is True
     assert workflow["signals"] == ["ay", "roll"]
-    stored = tmp_path / "_5_App/vehicle_workspaces/processingcar/processing/workflows.json"
+    stored = tmp_path / app.VEHICLE_WORKSPACE_ROOT / "processingcar/processing/workflows.json"
     assert stored.is_file()
     assert app.processing_workflows_payload("processingcar")["workflows"][0]["id"] == workflow["id"]
 
