@@ -41,7 +41,7 @@ driver_mass:
     - -5.3e-05
     - 6.749042
 body:
-  torsional_stiff_n_m_per_rad: 500000
+  torsional_stiff_n_m_per_rad: 300000
 front:
   wheel:
     radius_m: 0.2045
@@ -110,7 +110,7 @@ front:
           - 0
         - - 1
           - 26269.02525
-      free_length_m: 0.199700878416
+      free_length_m: 0.1997
       damper_table:
         table:
         - - -1
@@ -154,7 +154,7 @@ front:
       - -0.10664664
       - 0.2667
       - 0.11811
-      rate_n_m_per_rad: 1
+      rate_n_m_per_rad: 257.62483055
   masses:
     unsprung:
       mass_kg: 7.82268281
@@ -288,7 +288,7 @@ rear:
           - 0
         - - 1
           - 43781.70875
-      free_length_m: 0.263423049137
+      free_length_m: 0.2634
       damper_table:
         table:
         - - -1
@@ -332,7 +332,7 @@ rear:
       - -1.3925183
       - 0.3032125
       - 0.41224196
-      rate_n_m_per_rad: 1
+      rate_n_m_per_rad: 535.473018735
   masses:
     unsprung:
       mass_kg: 7.35220072
