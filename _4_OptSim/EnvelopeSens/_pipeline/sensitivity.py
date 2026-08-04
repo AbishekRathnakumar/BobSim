@@ -664,7 +664,7 @@ def _interp_by_speed(df: pd.DataFrame, column: str, speed: float) -> float:
 def _trapz(y: np.ndarray, x: np.ndarray) -> float:
     if hasattr(np, "trapezoid"):
         return float(np.trapezoid(y, x))
-    return float(np.trapz(y, x))
+    return float(np.trapz(y, x))  # type: ignore[attr-defined]  # numpy<2 fallback
 
 
 def compute_relative_sensitivities(

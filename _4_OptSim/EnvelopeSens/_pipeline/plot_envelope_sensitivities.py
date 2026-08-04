@@ -6,6 +6,7 @@ import argparse
 import os
 from pathlib import Path
 import textwrap
+from typing import Any, cast
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
@@ -272,7 +273,7 @@ def _plot_tornado_metric(
         ax.axis("off")
         return
 
-    effects = sorted(effects, key=lambda effect: float(effect["span"]), reverse=True)
+    effects = sorted(effects, key=lambda effect: float(cast(Any, effect["span"])), reverse=True)
     top = effects[:top_n][::-1]
     y = np.arange(len(top))
     all_values = [0.0]
