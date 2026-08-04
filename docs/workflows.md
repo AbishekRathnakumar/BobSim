@@ -1,0 +1,128 @@
+# Workflows
+
+`make help` is the authoritative target list. This doc covers the parts that
+aren't obvious from the target names.
+
+## First run on a fresh clone
+
+```bash
+make init          # git submodule update --init --recursive  ← do not skip
+make docker-build  # OpenModelica + requirements.txt
+make app           # http://127.0.0.1:8765
+```
+
+`make init` is not optional. Without it BobLib is empty or stale and every
+Modelica build fails. See [boblib-submodule.md](boblib-submodule.md).
+
+## Docker vs. native
+
+The makefile auto-detects context. Inside the container (`/.dockerenv` exists)
+targets run directly; outside, they are wrapped in `docker compose run --rm`.
+That wrapper is the `RUN` variable.
+
+Two consequences worth knowing:
+
+- `make app` and the `deploy-*` targets deliberately do **not** use `RUN`. They
+  run on the host with `$(PYTHON)`, so your host Python needs `requirements.txt`
+  installed if you want to run the app natively.
+- `make lint`, `make typecheck`, `make test` **do** use `RUN`. To run them
+  natively you need the dev tooling (`ruff`, `mypy`, `pytest`) installed in your
+  host environment; otherwise use Docker or `make shell`.
+
+Anything OpenModelica-dependent (all `standard-*`, `envelope-*`, `opt-*`
+targets) needs either the container or a local `omc` on `PATH`.
+
+## Target vocabulary
+
+| Prefix | Meaning |
+| --- | --- |
+| `docker-*` | Build/rebuild the dev image |
+| `shell-*` | Interactive shell in a workflow context |
+| `standard-*` | Build and run standard vehicle evaluations |
+| `envelope-*` | GGV / YMD performance-envelope maps |
+| `opt-*` | Sensitivity, response-surface, and DOE workflows |
+| `clean-*` | Remove generated artifacts |
+
+## Standard studies
+
+```bash
+make standard-eval-all      # ramp steer + steady state + transient + four post
+```
+
+Builds are incremental: `standard-build` and `standard-build-four-post` are
+file targets that only recompile when the corresponding `.mo` model, the `.mos`
+build script, or `BobLib/package.mo` changes. If a build seems stale after
+editing something else in BobLib, that dependency list is why — touch the model
+or run `make clean-standard`.
+
+Individual studies:
+
+```bash
+make standard-eval-ramp-steer
+make standard-eval-steady-state
+make standard-eval-transient
+make standard-eval-four-post   # uses the separate FourPostSim executable
+```
+
+Output: `_3_StandardSim/generated_results/` (`*_report_metrics.csv`, `*_report.pdf`).
+
+## Envelopes and sensitivities
+
+```bash
+make envelope-ggv / envelope-ymd / envelope-all
+make opt-standard   # StandardSens pre-screen sensitivities
+make opt-envelope   # EnvelopeSens sensitivities
+make opt-refined    # StandardSens refined response surfaces
+make opt-search METRICS="Metric=value ..."   # reverse lookup, see the DOE doc
+```
+
+Note the `opt-*` targets set `PYTHONPATH=_4_OptSim:.` and invoke modules as
+`StandardSens.*` / `EnvelopeSens.*`, not `_4_OptSim.StandardSens.*`. If you run
+one by hand, replicate that or the imports of `_shared` will fail.
+
+## Testing
+
+```bash
+make ci      # lint + typecheck + test — the fast gate, matches GitHub Actions
+```
+
+The regression story has three tiers, and mixing them up is the common mistake:
+
+| Target | Reruns simulations? | Use it for |
+| --- | --- | --- |
+| `make test` | No | Default fast gate. Checks current artifacts + physical invariants. |
+| `make regression-invariants` | No | Artifact-only sanity check. **Not** proof a model change is safe. |
+| `make regression-baseline` | **Yes** | The real check. Rebuilds, reruns all four studies, compares against `tests/regression_baselines/default_vehicle_standard.yml`. |
+
+Full baselines are excluded from GitHub CI because they exceed hosted runner
+limits. Run `make regression-baseline` locally before trusting a physics change.
+
+Only update a baseline when behavior changed *intentionally* and you have
+reviewed the regenerated reports — see [`CONTRIBUTING.md`](../CONTRIBUTING.md).
+
+For a fast check of the DOE pipeline with no OpenModelica toolchain:
+
+```bash
+make opt-doe-smoke
+```
+
+CI runs lint, typecheck, and this DOE smoke natively for fast feedback, then
+the full fast gate inside the Docker image.
+
+## Cleaning
+
+`make clean` only removes Python/tool caches. Generated workflow artifacts need
+the specific targets (`clean-app`, `clean-standard`, `clean-envelope`,
+`clean-opt`, `clean-visual`) or `clean-all`.
+
+`clean-owned` exists because Docker-run workflows can leave root-owned files on
+Linux hosts; it re-enters a no-network container to delete them. It no-ops if
+the image isn't built.
+
+## Deploy
+
+`make deploy` builds a per-OS PyInstaller artifact into
+`_0_Utils/deploy/dist/BobSim/`. It bundles the Python backend only — not
+simulation executables, reports, or caches. Windows and macOS release assets
+come from the `Release Builds` GitHub Actions workflow on a `v*` tag, not from a
+local build. Never commit `.exe`/`.app`/`.zip`/`.tar.gz` outputs.

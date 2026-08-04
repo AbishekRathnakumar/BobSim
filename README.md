@@ -15,6 +15,11 @@ Use the BobDyn documentation site as the detailed source of truth. This README i
 the quick release guide for getting a clean checkout running and checking that it
 is healthy.
 
+Repo-local documentation lives in [`docs/`](docs/README.md): the layer
+architecture, workflow/testing guide, the DOE and target-metrics reverse-lookup
+pipeline, and BobLib submodule troubleshooting. Contributors and coding agents
+should start from [`AGENTS.md`](AGENTS.md).
+
 ## Repository Layout
 
 - `_0_Utils/`: shared Python utilities, plotting/reporting helpers, and the
@@ -189,6 +194,31 @@ make standard-build-four-post
 ```
 
 Reports and metric CSVs are written under `_3_StandardSim/generated_results/`.
+
+## Design of Experiments
+
+Sweep vehicle parameters and search backwards from target performance metrics
+to a matching vehicle. A small run, from a clean checkout:
+
+```bash
+make opt-standard DOE_METHOD=lhs DOE_SAMPLES=3
+```
+
+That builds and runs FourPostEval if needed, then samples, compiles, simulates,
+and aggregates the variants. Reverse lookup against the aggregated table:
+
+```bash
+make opt-search METRICS="SteadyStateEval_understeer_gradient_deg_per_g=0.05" SEARCH_TOP=5
+```
+
+To validate the pipeline without an OpenModelica toolchain:
+
+```bash
+make opt-doe-smoke
+```
+
+See [`docs/doe-reverse-engineering.md`](docs/doe-reverse-engineering.md) for the
+sweep configuration and how to read a search result.
 
 ## Cleanup
 
