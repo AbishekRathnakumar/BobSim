@@ -24,6 +24,31 @@ DOE_CONFIG = CONFIG_DIR / "_doe_config.yaml"
 COMPILER_CONFIG = CONFIG_DIR / "compiler_config.yaml"
 
 
+def _relpath_posix(target: Path | str, start: Path | str) -> str:
+    """Relative path with forward slashes, regardless of host OS.
+
+    `_doe_config.yaml` is checked in and is also consumed inside the Linux
+    build container, so native Windows separators must never reach it: a
+    backslash path is a single opaque filename on Linux, not a relative path.
+    """
+    return Path(os.path.relpath(target, start)).as_posix()
+
+
+def _env_str(name: str) -> str | None:
+    value = os.environ.get(name, "").strip()
+    return value or None
+
+
+def _env_int(name: str) -> int | None:
+    raw = _env_str(name)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from None
+
+
 def load_yaml(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
@@ -163,18 +188,33 @@ def build_doe_config(
         sampling_cfg = {}
     if not isinstance(sampling_cfg, dict):
         raise TypeError("architecture YAML sampling must be a mapping when provided")
+    sampling_cfg = dict(sampling_cfg)
+
+    samples = int(architecture_cfg.get("samples", 3))
+
+    # Environment overrides let a small run be requested without editing the
+    # checked-in architecture YAML (make opt-standard DOE_SAMPLES=3).
+    method_override = _env_str("BOBSIM_DOE_METHOD")
+    if method_override:
+        sampling_cfg["method"] = method_override
+    intervals_override = _env_int("BOBSIM_DOE_INTERVALS")
+    if intervals_override is not None:
+        sampling_cfg["intervals"] = intervals_override
+    samples_override = _env_int("BOBSIM_DOE_SAMPLES")
+    if samples_override is not None:
+        samples = samples_override
 
     return {
         "architecture": {
-            "template": os.path.relpath(template_cfg_path, STANDARD_DIR),
+            "template": _relpath_posix(template_cfg_path, STANDARD_DIR),
             "vehicle": vehicle_name,
             "record": record_name,
-            "source": os.path.relpath(architecture_config_path, STANDARD_DIR),
+            "source": _relpath_posix(architecture_config_path, STANDARD_DIR),
         },
-        "baseline_mo": os.path.relpath(record_path, DOE_CONFIG.parent),
+        "baseline_mo": _relpath_posix(record_path, DOE_CONFIG.parent),
         "variables": variables,
         "sampling": sampling_cfg,
-        "samples": int(architecture_cfg.get("samples", 3)),
+        "samples": samples,
         "seed": architecture_cfg.get("seed", 42),
     }
 
