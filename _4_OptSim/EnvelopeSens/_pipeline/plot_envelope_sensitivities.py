@@ -279,16 +279,16 @@ def _plot_tornado_metric(
     all_values = [0.0]
 
     for y_pos, effect in zip(y, top, strict=False):
-        deltas = np.asarray(effect["deltas"], dtype=float)
-        low = float(np.nanmin(deltas))
-        high = float(np.nanmax(deltas))
+        delta_values = np.asarray(effect["deltas"], dtype=float)
+        low = float(np.nanmin(delta_values))
+        high = float(np.nanmax(delta_values))
         all_values.extend([low, high])
         ax.hlines(y_pos, low, high, color="#2F6B9A", linewidth=5.0, alpha=0.62)
         ax.scatter(
-            deltas,
-            np.full_like(deltas, y_pos, dtype=float),
+            delta_values,
+            np.full_like(delta_values, y_pos, dtype=float),
             s=18,
-            color=np.where(deltas >= 0.0, "#9A6A3A", "#2F6B9A"),
+            color=np.where(delta_values >= 0.0, "#9A6A3A", "#2F6B9A"),
             edgecolor="white",
             linewidth=0.35,
             zorder=3,

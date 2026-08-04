@@ -11,7 +11,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -309,7 +309,9 @@ def run_envelope_sensitivities(
             variant_output / "track_performance_profile.csv",
             index=False,
         )
-        track_profile_rows.extend(variant_track_profile.to_dict("records"))
+        track_profile_rows.extend(
+            cast(list[dict[str, float | str]], variant_track_profile.to_dict("records"))
+        )
 
         metric_rows.append(
             {
@@ -893,7 +895,7 @@ def _nearest_speed_row(df: pd.DataFrame, speed: float) -> pd.Series:
     if df.empty:
         raise ValueError("Cannot select a longitudinal limit from an empty table.")
     distance = (df["speed_mps"] - speed).abs()
-    return df.loc[distance.idxmin()]
+    return cast(pd.Series, df.loc[distance.idxmin()])
 
 
 def _max_feasible_lateral_g(envelope: Any) -> float:
