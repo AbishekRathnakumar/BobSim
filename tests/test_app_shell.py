@@ -319,9 +319,16 @@ def test_openmodelica_auto_detection_uses_user_package_library(
 ) -> None:
     clear_openmodelica_settings(monkeypatch)
     monkeypatch.setenv("HOME", str(tmp_path))
+    # Path.home() reads USERPROFILE on Windows, HOME elsewhere; set both so the
+    # lookup stays inside tmp_path on every platform.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     home = tmp_path / "OpenModelica"
     omc = home / "bin" / ("omc.exe" if app.platform.system() == "Windows" else "omc")
-    user_library = tmp_path / ".openmodelica" / "libraries"
+    if app.platform.system() == "Windows":
+        monkeypatch.setenv("APPDATA", str(tmp_path / "AppData" / "Roaming"))
+        user_library = tmp_path / "AppData" / "Roaming" / ".openmodelica" / "libraries"
+    else:
+        user_library = tmp_path / ".openmodelica" / "libraries"
     omc.parent.mkdir(parents=True)
     omc.write_text("#!/bin/sh\n", encoding="utf-8")
     omc.chmod(0o755)

@@ -217,6 +217,16 @@ def _modelica_build_archive_dir(target: BuildTargetSpec, signature: str) -> Path
     return _safe_repo_path(MODELICA_BUILD_CACHE_ROOT / target.id / signature)
 
 
+def _staging_dir(parent: Path, name: str, kind: str) -> Path:
+    """Short-lived sibling directory, renamed into place once it is complete.
+
+    Only the random suffix has to be unique, so the source name is truncated.
+    Embedding a full build signature here pushed generated Modelica paths past
+    the Windows 260-character limit and broke the copy.
+    """
+    return parent / f".{name[:8]}.{kind}-{uuid.uuid4().hex[:8]}"
+
+
 def _modelica_build_dir_ready(target: BuildTargetSpec, build_dir: Path | None = None) -> bool:
     directory = build_dir or _safe_repo_path(target.build_dir)
     return not _modelica_build_missing_files(target, directory)
@@ -310,7 +320,7 @@ def _store_modelica_build_archive(
 
     parent = archive_dir.parent
     parent.mkdir(parents=True, exist_ok=True)
-    tmp_dir = parent / f".{archive_dir.name}.tmp-{uuid.uuid4().hex[:8]}"
+    tmp_dir = _staging_dir(parent, archive_dir.name, "tmp")
     try:
         shutil.copytree(build_dir, tmp_dir / "files", symlinks=True, ignore=_modelica_archive_ignore)
         manifest = {
@@ -349,7 +359,7 @@ def _restore_modelica_build_from_archive(
 
     build_dir = _safe_repo_path(target.build_dir)
     build_dir.parent.mkdir(parents=True, exist_ok=True)
-    tmp_dir = build_dir.parent / f".{build_dir.name}.restore-{uuid.uuid4().hex[:8]}"
+    tmp_dir = _staging_dir(build_dir.parent, build_dir.name, "restore")
     try:
         shutil.copytree(files_dir, tmp_dir, symlinks=True)
         _write_modelica_build_metadata(target, signature, source="archive", build_dir=tmp_dir)

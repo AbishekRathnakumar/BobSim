@@ -1159,7 +1159,12 @@ def _ensure_package_order_entry(path: Path, entry: str) -> None:
 
 
 def _display_path(path: Path, repo_root: Path) -> str:
+    """Repo-relative path for API payloads and the browser UI.
+
+    Always forward-slashed: these strings are compared against and served as
+    repo-relative keys, so they must not vary with the host OS separator.
+    """
     try:
-        return str(path.resolve().relative_to(repo_root))
+        return path.resolve().relative_to(repo_root).as_posix()
     except ValueError:
         return str(path)
