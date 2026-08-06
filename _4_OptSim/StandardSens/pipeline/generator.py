@@ -84,10 +84,11 @@ def _combined_sprung_mass(vehicle: dict[str, Any]) -> tuple[float, tuple[float, 
     if total_mass <= 0.0:
         raise ValueError("Combined sprung mass must be positive.")
 
-    return total_mass, tuple(
+    combined = tuple(
         sum(mass * cg[i] for mass, cg in masses) / total_mass
         for i in range(3)
     )
+    return float(total_mass), (combined[0], combined[1], combined[2])
 
 
 def _distance(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
