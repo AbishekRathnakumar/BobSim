@@ -12,13 +12,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Lint, types, and the whole pytest suite in one job. These share a checkout
-  # and a dependency install, and none of them need OpenModelica: every test
-  # that does is gated on regression artifacts CI never generates.
-  checks:
-    name: Lint, types, tests
+  # Lint, Type check and Tests are separate jobs because the protect-main
+  # ruleset requires them as named status checks. Each now runs exactly once:
+  # previously the Docker job re-ran `make ci`, duplicating all three.
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
@@ -33,13 +33,57 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade pip -r requirements.txt
 
-      - name: Run fast gate
-        run: make ci RUN=
+      - name: Run ruff
+        run: make lint RUN=
 
-  # The unit tests above never touch the toolchain, so this job exists to prove
-  # the environment users actually run in still works: the image builds, omc is
-  # functional, and the DOE pipeline runs inside it. Full StandardSim baselines
-  # stay out of CI — they exceed hosted runner limits (see CONTRIBUTING.md).
+  typecheck:
+    name: Type check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip -r requirements.txt
+
+      - name: Run mypy
+        run: make typecheck RUN=
+
+  # Runs natively rather than in the image: every test that needs OpenModelica
+  # is gated on regression artifacts CI never generates, so the container added
+  # no coverage here -- only an image build.
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip -r requirements.txt
+
+      - name: Run pytest
+        run: make test RUN=
+
+  # Proves the environment users actually run in still works: the image builds,
+  # omc is functional, and the DOE pipeline runs inside it. Full StandardSim
+  # baselines stay out of CI -- they exceed hosted runner limits (CONTRIBUTING).
   container:
     name: Container toolchain
     runs-on: ubuntu-latest
