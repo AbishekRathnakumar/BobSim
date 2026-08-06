@@ -10,7 +10,15 @@ import yaml
 from StandardSens.pipeline.modelica_params import replace_value, scale_value
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-FOUR_POST_METRICS_CSV = REPO_ROOT / "_3_StandardSim/results/four_post_eval_report_metrics.csv"
+
+# FourPostEval writes to generated_results/ (see four_post_eval_config.yml and
+# test_report_outputs_stay_under_standard_generated_results). The bare results/
+# path is the legacy location, kept as a fallback for older local artifacts.
+FOUR_POST_METRICS_CANDIDATES = (
+    REPO_ROOT / "_3_StandardSim/generated_results/four_post_eval_report_metrics.csv",
+    REPO_ROOT / "_3_StandardSim/results/four_post_eval_report_metrics.csv",
+)
+FOUR_POST_METRICS_CSV = FOUR_POST_METRICS_CANDIDATES[0]
 
 
 def load_config(config_path: str | Path) -> dict:
@@ -18,11 +26,18 @@ def load_config(config_path: str | Path) -> dict:
         return yaml.safe_load(f)
 
 
-def _load_metrics_csv(path: Path) -> dict[str, float]:
-    if not path.exists():
+def _load_metrics_csv(path: Path | None = None) -> dict[str, float]:
+    candidates = (path,) if path is not None else FOUR_POST_METRICS_CANDIDATES
+    for candidate in candidates:
+        if candidate.exists():
+            path = candidate
+            break
+    else:
+        searched = "\n  ".join(str(c) for c in candidates)
         raise FileNotFoundError(
-            "Static balance free length requires FourPostEval metrics. "
-            f"Run FourPostEval first or provide the metrics file: {path}"
+            "Static balance free length requires FourPostEval metrics.\n"
+            "Run 'make standard-eval-four-post' before 'make opt-standard'.\n"
+            f"Searched:\n  {searched}"
         )
 
     metrics: dict[str, float] = {}
@@ -250,7 +265,7 @@ def generate_variants(
     vehicle = load_config(template_path)
     context = {
         "vehicle": vehicle,
-        "four_post_metrics": _load_metrics_csv(FOUR_POST_METRICS_CSV),
+        "four_post_metrics": _load_metrics_csv(),
     }
 
     var_lookup = {var["path"]: var for var in cfg["variables"]}

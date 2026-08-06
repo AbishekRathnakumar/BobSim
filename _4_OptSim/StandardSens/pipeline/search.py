@@ -22,14 +22,18 @@ import sys
 from pathlib import Path
 import numpy as np
 import pandas as pd
+import yaml
 from scipy.spatial import KDTree
 
 STANDARD_DIR = Path(__file__).resolve().parents[1]
 OPTSIM_DIR = STANDARD_DIR.parent
 DEFAULT_PARQUET = OPTSIM_DIR / "Build/StandardSens/standard_sensitivity_results.parquet"
+DEFAULT_DOE_CONFIG = STANDARD_DIR / "configs/_doe_config.yaml"
 
-# these are params that we sweep
-INPUT_PARAMS = [
+# Used only when the DOE config cannot be read. Keeping this in sync by hand is
+# what caused swept parameters to go missing from the results, so prefer the
+# config-derived list below.
+FALLBACK_INPUT_PARAMS = [
     "front.stabar.rate_n_m_per_rad",
     "rear.stabar.rate_n_m_per_rad",
     "front.wheel.toe_deg",
@@ -40,22 +44,45 @@ INPUT_PARAMS = [
 ]
 
 
+def load_input_params(doe_config_path: Path = DEFAULT_DOE_CONFIG) -> list[str]:
+    """Return the swept `vehicle.yml` paths, in DOE config order.
+
+    The aggregator keys each result row by these same paths, so deriving the
+    list here keeps the reverse lookup reporting every parameter the sweep
+    actually varied.
+    """
+    try:
+        with open(doe_config_path) as handle:
+            cfg = yaml.safe_load(handle) or {}
+    except (OSError, yaml.YAMLError):
+        return list(FALLBACK_INPUT_PARAMS)
+
+    paths = [
+        variable["path"]
+        for variable in (cfg.get("variables") or [])
+        if isinstance(variable, dict) and variable.get("path")
+    ]
+    return paths or list(FALLBACK_INPUT_PARAMS)
+
+
 # ---------------------------------------------------------------------------
 # Search
 # ---------------------------------------------------------------------------
 
 def search(targets: dict[str, float], parquet_path: Path = DEFAULT_PARQUET,
-           top: int = 1, ) -> pd.DataFrame:
+           top: int = 1, doe_config_path: Path = DEFAULT_DOE_CONFIG) -> pd.DataFrame:
     """Find the nearest variants to the target metric values.
 
     Args:
-        targets:      dict of metric_name -> target_value
-        parquet_path: path to the aggregated StandardSens parquet
-        top:          number of nearest variants to return
+        targets:         dict of metric_name -> target_value
+        parquet_path:    path to the aggregated StandardSens parquet
+        top:             number of nearest variants to return
+        doe_config_path: DOE config used to identify the swept input columns
 
     Returns:
         DataFrame with top nearest variants — input params + metrics + distance
     """
+    input_params = load_input_params(doe_config_path)
     csv_path = parquet_path.with_suffix(".csv")
     if parquet_path.exists():
         df = pd.read_parquet(parquet_path)
@@ -71,7 +98,7 @@ def search(targets: dict[str, float], parquet_path: Path = DEFAULT_PARQUET,
     if missing:
         raise ValueError(
             f"Unknown metrics: {missing}\n"
-            f"Available: {[c for c in df.columns if c not in INPUT_PARAMS + ['variant']]}"
+            f"Available: {[c for c in df.columns if c not in input_params + ['variant']]}"
         )
 
     metric_cols = list(targets.keys())
@@ -93,7 +120,16 @@ def search(targets: dict[str, float], parquet_path: Path = DEFAULT_PARQUET,
     distances_arr = np.atleast_1d(distances)
     indices_arr = np.atleast_1d(indices).astype(int)
 
-    input_cols = [col for col in INPUT_PARAMS if col in df.columns]
+    input_cols = [col for col in input_params if col in df.columns]
+    missing_inputs = [col for col in input_params if col not in df.columns]
+    if missing_inputs:
+        print(
+            f"WARNING: {len(missing_inputs)} swept parameter(s) are missing from the "
+            f"results table and will not be reported: {missing_inputs}\n"
+            "         The table is likely stale; rerun 'make opt-standard'.",
+            file=sys.stderr,
+        )
+
     results = df.iloc[indices_arr][["variant"] + input_cols + metric_cols].copy()
     results.insert(1, "distance", [round(float(d), 6) for d in distances_arr])
 
@@ -148,6 +184,11 @@ def _parse_metrics(metric_args: list[str]) -> dict[str, float]:
 
 def _print_results(results: pd.DataFrame, targets: dict[str, float]) -> None:
     metric_cols = list(targets.keys())
+    input_cols = [
+        col for col in results.columns
+        if col not in metric_cols and col not in ("variant", "distance")
+    ]
+    width = max((len(col) for col in input_cols), default=35)
 
     print("\nTarget metrics:")
     for metric, val in targets.items():
@@ -157,9 +198,8 @@ def _print_results(results: pd.DataFrame, targets: dict[str, float]) -> None:
     for _, row in results.iterrows():
         print(f"Variant:  {row['variant']}  (distance: {row['distance']})")
         print("  Swept inputs:")
-        for param in INPUT_PARAMS:
-            if param in row:
-                print(f"    {param:<35} {row[param]:.4f}")
+        for param in input_cols:
+            print(f"    {param:<{width}} {row[param]:.4f}")
         print("  Metrics:")
         for metric in metric_cols:
             print(f"    {metric:<35} {row[metric]:.6f}  (target: {targets[metric]})")

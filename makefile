@@ -17,6 +17,19 @@ FOUR_POST_SIM_EXE := _3_StandardSim/BuildBobLib/FourPostSim/$(FOUR_POST_SIM_CLAS
 BUILD_VEHICLE_MOS := _3_StandardSim/build_vehicle_sim.mos
 BUILD_FOUR_POST_MOS := _3_StandardSim/build_four_post_sim.mos
 
+SEARCH_TOP ?= 1
+
+# DOE sweep size overrides. Empty means "use configs/vehicle_architecture.yaml".
+DOE_METHOD ?=
+DOE_SAMPLES ?=
+DOE_INTERVALS ?=
+DOE_ENV := \
+	$(if $(DOE_METHOD),BOBSIM_DOE_METHOD=$(DOE_METHOD),) \
+	$(if $(DOE_SAMPLES),BOBSIM_DOE_SAMPLES=$(DOE_SAMPLES),) \
+	$(if $(DOE_INTERVALS),BOBSIM_DOE_INTERVALS=$(DOE_INTERVALS),)
+
+FOUR_POST_METRICS := _3_StandardSim/generated_results/four_post_eval_report_metrics.csv
+
 DEPLOY_MODE ?= onefile
 DEPLOY_INSTALL_DEPS ?= 1
 DEPLOY_SKIP_CONFLICT_CHECK ?= 0
@@ -67,7 +80,7 @@ CLEAN_DOCKER_IMAGE ?= bobdyn/bobsim:latest
 	sync-vehicle standard-build standard-build-four-post standard-regression-four-post \
 	standard-eval-ramp-steer standard-eval-steady-state standard-eval-transient standard-eval-four-post standard-eval-all \
 	envelope-ggv envelope-ymd envelope-all \
-	opt-standard opt-envelope opt-refined \
+	opt-standard opt-envelope opt-refined opt-search opt-doe-smoke \
 	clean clean-app clean-visual clean-standard clean-envelope clean-opt clean-owned clean-all
 
 help:
@@ -111,9 +124,21 @@ help:
 		'  envelope-ymd              Generate the YMD envelope' \
 		'  envelope-all              Generate all envelope outputs' \
 		'' \
+		'  opt-doe-smoke             Check DOE plumbing without OpenModelica' \
 		'  opt-standard              Run StandardSens pre-screen sensitivities' \
 		'  opt-envelope              Run EnvelopeSens sensitivities' \
 		'  opt-refined               Run StandardSens refined response surfaces' \
+		'  opt-search                Reverse lookup: target metrics -> vehicle parameters' \
+		'' \
+		'  Search variables:' \
+		'    METRICS="NAME=VALUE ..."             Required target metrics' \
+		'    SEARCH_TOP=<n>                       Nearest variants to return. Default: 1' \
+		'' \
+		'  DOE sweep variables (default: configs/vehicle_architecture.yaml):' \
+		'    DOE_METHOD=lhs|interval_splice       Sampling method' \
+		'    DOE_SAMPLES=<n>                      LHS samples (plus baseline)' \
+		'    DOE_INTERVALS=<n>                    interval_splice intervals' \
+		'    example: make opt-standard DOE_METHOD=lhs DOE_SAMPLES=3' \
 		'' \
 		'  regression-invariants     Check current regression artifacts for physical consistency' \
 		'  regression-baseline       Run full default StandardSim baseline simulations' \
@@ -234,14 +259,35 @@ envelope-ymd:
 
 envelope-all: envelope-ggv envelope-ymd
 
-opt-standard:
-	$(RUN) env PYTHONPATH=$(WORKSPACE)/_4_OptSim:$(WORKSPACE) $(PYTHON) -m StandardSens.pre_screen_sensitivities
+# Variant generation needs FourPostEval motion ratios to hold static ride
+# height while spring rate is swept, so produce them on demand.
+$(FOUR_POST_METRICS):
+	$(MAKE) standard-eval-four-post
+
+opt-doe-smoke:
+	$(RUN) $(PYTHON) -m pytest tests/test_doe_pipeline.py -q
+
+opt-standard: $(FOUR_POST_METRICS)
+	$(RUN) env $(DOE_ENV) PYTHONPATH=$(WORKSPACE)/_4_OptSim:$(WORKSPACE) $(PYTHON) -m StandardSens.pre_screen_sensitivities
 
 opt-envelope:
 	$(RUN) env PYTHONPATH=$(WORKSPACE)/_4_OptSim:$(WORKSPACE) $(PYTHON) -m EnvelopeSens.sensitivities
 
 opt-refined:
 	$(RUN) env PYTHONPATH=$(WORKSPACE)/_4_OptSim:$(WORKSPACE) $(PYTHON) -m StandardSens.refined_response_surfaces
+
+opt-search:
+	@if [ -z '$(METRICS)' ]; then \
+		printf '%s\n' \
+			'error: METRICS is required.' \
+			'' \
+			'  make opt-search METRICS="SteadyStateEval_understeer_gradient_deg_per_g=0.05"' \
+			'  make opt-search METRICS="MetricA=1.0 MetricB=2.0" SEARCH_TOP=5' \
+			'' \
+			'Requires a populated results table; run make opt-standard first.'; \
+		exit 1; \
+	fi
+	$(RUN) env PYTHONPATH=$(WORKSPACE)/_4_OptSim:$(WORKSPACE) $(PYTHON) -m StandardSens.pipeline.search --metrics $(METRICS) --top $(SEARCH_TOP)
 
 clean:
 	bash -lc 'find $(CLEAN_WORKSPACE) -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null; \
