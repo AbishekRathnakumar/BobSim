@@ -2,9 +2,11 @@ name: CI
 
 on:
   workflow_dispatch:
-  # Every branch, not just main: long-lived integration branches (DOE, envelope
-  # work) otherwise drift out of sync and only fail at merge time.
+  # push and pull_request test different commits: push tests the branch as
+  # written, pull_request tests it merged into the base. Scoping push to main
+  # keeps both without running everything twice on every PR branch.
   push:
+    branches: [main]
   pull_request:
 
 concurrency:
