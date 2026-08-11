@@ -26,5 +26,12 @@ ignore_missing_imports = true
 module = ["pyvista.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = [
+    "_0_Utils.kin_py.suspension_model.*",
+    "tests.kin_py.*",
+]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 addopts = "-p no:cacheprovider"
