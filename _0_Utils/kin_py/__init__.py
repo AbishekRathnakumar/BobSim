@@ -1,7 +1,4 @@
-"""Compatibility imports for the shared suspension kinematics model.
-
-New code should import from ``_0_Utils.kin_py``.
-"""
+"""Shared suspension kinematics model exports."""
 
 from _0_Utils.kin_py.kinematics import (
     BUMP_CURVE_SOURCES,

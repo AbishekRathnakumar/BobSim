@@ -8,11 +8,26 @@ import pytest
 import yaml
 
 from _3_StandardSim.FourPostEval import four_post_eval_sim as four_post_eval
-from _5_App.kinematics import KINEMATIC_CURVE_META, CornerKinematics, kinematic_curves_payload
+from _0_Utils.kin_py import (
+    KINEMATIC_CURVE_META,
+    CornerKinematics,
+    kinematic_curves_payload,
+)
+from _5_App import kinematics as app_kinematics
 
 
 ROOT = Path(__file__).resolve().parents[1]
 INCH_TO_M = 0.0254
+
+
+def test_kinematics_model_lives_in_shared_suspension_package() -> None:
+    assert CornerKinematics.__module__ == "_0_Utils.kin_py.kinematics"
+    assert kinematic_curves_payload.__module__ == "_0_Utils.kin_py.kinematics"
+
+
+def test_app_kinematics_import_is_compatibility_shim() -> None:
+    assert app_kinematics.CornerKinematics is CornerKinematics
+    assert app_kinematics.kinematic_curves_payload is kinematic_curves_payload
 
 
 def _direct_quarter_car_vehicle() -> dict[str, object]:
@@ -193,6 +208,12 @@ def _four_post_result_from_kinematics(
         load_delta_n: float = 0.0,
     ) -> None:
         index = index_by_time[time]
+        assert values["camber_deg"] is not None
+        assert values["toe_deg"] is not None
+        assert values["caster_deg"] is not None
+        assert values["kpi_deg"] is not None
+        assert values["mech_trail_mm"] is not None
+        assert values["scrub_mm"] is not None
         raw_values = {
             "Gamma": -np.radians(float(values["camber_deg"])),
             "Toe": np.radians(float(values["toe_deg"])),
