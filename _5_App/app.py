@@ -32,7 +32,7 @@ from _5_App.registry import (
     build_modelica_build_targets,
     build_workflows,
 )
-from _5_App.kinematics import kinematic_curves_payload
+from _0_Utils.kin_py import kinematic_curves_payload
 from _5_App.modelica_generator import modelica_stack_status_payload
 
 OutputSpec = app_contracts.OutputSpec
