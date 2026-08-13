@@ -60,6 +60,7 @@ def test_modelica_generator_writes_full_boblib_stack(tmp_path: Path) -> None:
     assert f"parameter {rear_arch.record_type} pRrAxleDW(" in record_text
     assert "parameter Controllers.VCURecord pVCU(" in record_text
     assert f"tau_max = {vehicle_data['powertrain']['pVCU']['tau_max']}" in record_text
+    assert f"P_max_mot = {vehicle_data['powertrain']['pVCU']['P_max_mot']}" in record_text
     assert "parameter ElectricDrives.MotorRecord pMotor(" in record_text
     assert f"P_mech_peak = {vehicle_data['powertrain']['pMotor']['P_mech_peak']}" in record_text
     assert "parameter Modelica.Units.SI.RotationalSpringConstant pTorsionalStiff = 500000;" in record_text

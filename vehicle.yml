@@ -563,6 +563,7 @@ powertrain:
     SOC_start: 1
   pVCU:
     tau_max: 230
+    P_max_mot: 80000
     regenTorqueLimit: 220
     w_eps: 1
     motorSpeedSign: 1

@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
@@ -42,6 +42,9 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from numpy.typing import NDArray
 from scipy.spatial import ConvexHull
 import yaml
+
+from _0_Utils.dyn_py.models import DOFModel, ReducedVehicleModel
+from _0_Utils.dyn_py.qss import solve_moment_state
 
 
 G = 9.80665
@@ -104,6 +107,7 @@ class VehicleParams:
 @dataclass(frozen=True)
 class YMDConfig:
     speed: float = 15.0  # m/s
+    model_dof: DOFModel = 3
 
     beta_min_deg: float = -12.0
     beta_max_deg: float = 12.0
@@ -385,6 +389,7 @@ def ymd_point(
     config: YMDConfig,
     beta: float,
     hwa: float,
+    reduced_model: ReducedVehicleModel | None = None,
 ) -> tuple[float, float, bool]:
     """
     Solve one quasi-static YMD point.
@@ -394,6 +399,23 @@ def ymd_point(
         mz [N*m]
         converged
     """
+    if reduced_model is not None:
+        trim = solve_moment_state(
+            reduced_model,
+            speed_mps=config.speed,
+            beta_rad=beta,
+            steering_rad=hwa / vehicle.steering_ratio,
+            yaw_rate_radps=config.yaw_rate,
+            max_nfev=max(50, config.max_iter * 6),
+            tolerance=config.tol_ay,
+        )
+        velocity = trim.state[reduced_model.dof :]
+        ay = float(
+            trim.output.generalized_acceleration[1]
+            + config.yaw_rate * velocity[0]
+        )
+        return ay, float(trim.output.body_moment_nm[2]), trim.success
+
     ay = 0.0
     ax = 0.0
 
@@ -451,6 +473,7 @@ def ymd_point(
 def generate_ymd(
     vehicle: VehicleParams,
     config: YMDConfig,
+    reduced_model: ReducedVehicleModel | None = None,
 ) -> YMDResult:
     """
     Generate a first-principles yaw moment diagram.
@@ -504,6 +527,7 @@ def generate_ymd(
                 config=config,
                 beta=beta,
                 hwa=hwa,
+                reduced_model=reduced_model,
             )
 
             ay_grid[i, j] = ay
@@ -704,7 +728,11 @@ def plot_ymd(
     for label_count, i in enumerate(beta_indices):
         beta = int(round(beta_deg[i]))
 
-        mask = np.isfinite(ay_g[i, :]) & np.isfinite(mz[i, :])
+        mask = (
+            result.converged[i, :]
+            & np.isfinite(ay_g[i, :])
+            & np.isfinite(mz[i, :])
+        )
 
         if not np.any(mask):
             continue
@@ -739,7 +767,11 @@ def plot_ymd(
     for label_count, j in enumerate(delta_indices):
         delta_rw = int(round(delta_rw_deg[j]))
 
-        mask = np.isfinite(ay_g[:, j]) & np.isfinite(mz[:, j])
+        mask = (
+            result.converged[:, j]
+            & np.isfinite(ay_g[:, j])
+            & np.isfinite(mz[:, j])
+        )
 
         if not np.any(mask):
             continue
@@ -814,7 +846,8 @@ def plot_ymd(
         fig.savefig(output_path, dpi=300)
         print(f"Saved YMD wireframe plot: {output_path}")
 
-    plt.show()
+    if output_path is None:
+        plt.show()
 
 
 def plot_ymd_beta_slices(
@@ -840,7 +873,11 @@ def plot_ymd_beta_slices(
         if i % step != 0 and i != len(beta_deg) - 1:
             continue
 
-        mask = np.isfinite(ay_g[i, :]) & np.isfinite(mz[i, :])
+        mask = (
+            result.converged[i, :]
+            & np.isfinite(ay_g[i, :])
+            & np.isfinite(mz[i, :])
+        )
 
         if np.any(mask):
             ax.plot(
@@ -874,7 +911,8 @@ def plot_ymd_beta_slices(
         fig.savefig(output_path, dpi=300)
         print(f"Saved YMD beta-slice plot: {output_path}")
 
-    plt.show()
+    if output_path is None:
+        plt.show()
 
 
 def plot_ymd_contours(
@@ -891,12 +929,17 @@ def plot_ymd_contours(
 
     fig, ax = plt.subplots(figsize=(8.5, 6.5))
 
-    max_abs_mz = np.nanmax(np.abs(result.mz))
+    finite_converged = result.converged & np.isfinite(result.mz)
+    if not np.any(finite_converged):
+        raise ValueError("YMD contour plot has no converged finite points.")
+    max_abs_mz = np.nanmax(np.abs(result.mz[finite_converged]))
+    mz_masked = np.ma.masked_where(~result.converged, result.mz)
+    ay_masked = np.ma.masked_where(~result.converged, result.ay / G)
 
     contour = ax.contourf(
         beta_grid,
         hwa_grid,
-        result.mz,
+        mz_masked,
         levels=np.linspace(-max_abs_mz, max_abs_mz, 33),
         cmap="coolwarm",
     )
@@ -907,7 +950,7 @@ def plot_ymd_contours(
     ay_contours = ax.contour(
         beta_grid,
         hwa_grid,
-        result.ay / G,
+        ay_masked,
         levels=12,
         colors="black",
         linewidths=0.8,
@@ -930,7 +973,8 @@ def plot_ymd_contours(
         fig.savefig(output_path, dpi=300)
         print(f"Saved YMD contour plot: {output_path}")
 
-    plt.show()
+    if output_path is None:
+        plt.show()
 
 
 def save_ymd_csv(result: YMDResult, output_path: str | Path) -> None:
@@ -986,8 +1030,12 @@ def load_ymd_config(path: str | Path = DEFAULT_YMD_CONFIG) -> dict[str, Any]:
 
 def config_to_ymd_config(config: dict[str, Any]) -> YMDConfig:
     generation = config.get("generation") or {}
+    model_dof = int(generation.get("model_dof", YMDConfig.model_dof))
+    if model_dof not in {3, 6, 10, 14}:
+        raise ValueError(f"generation.model_dof must be 3, 6, 10, or 14; got {model_dof}.")
     return YMDConfig(
         speed=float(generation.get("speed_mps", YMDConfig.speed)),
+        model_dof=cast(DOFModel, model_dof),
         beta_min_deg=float(generation.get("beta_min_deg", YMDConfig.beta_min_deg)),
         beta_max_deg=float(generation.get("beta_max_deg", YMDConfig.beta_max_deg)),
         beta_points=int(generation.get("beta_points", YMDConfig.beta_points)),
@@ -1455,6 +1503,8 @@ def _add_ymd_summary_page(
 
     def metric_text(key: str, fmt: str) -> str:
         value = summary.get(key)
+        if value is None:
+            return "-"
         try:
             return fmt.format(float(value))
         except (TypeError, ValueError):
@@ -2184,6 +2234,7 @@ def generate_ymd_speed_sweep(
     vehicle: VehicleParams,
     base_config: YMDConfig,
     speeds: FloatArray,
+    reduced_model: ReducedVehicleModel | None = None,
 ) -> YMDSpeedSweepResult:
     """
     Generate YMD carpets across multiple velocities.
@@ -2200,6 +2251,7 @@ def generate_ymd_speed_sweep(
 
         config = YMDConfig(
             speed=float(speed),
+            model_dof=base_config.model_dof,
             beta_min_deg=base_config.beta_min_deg,
             beta_max_deg=base_config.beta_max_deg,
             beta_points=base_config.beta_points,
@@ -2214,7 +2266,7 @@ def generate_ymd_speed_sweep(
             warn_tire_load_range=False,
         )
 
-        result = generate_ymd(vehicle, config)
+        result = generate_ymd(vehicle, config, reduced_model=reduced_model)
         results.append(result)
 
     print("\nYMD speed sweep complete.")
@@ -2725,6 +2777,7 @@ def main() -> None:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
+    from _0_Utils.dyn_py import create_model, load_reduced_vehicle_parameters
     from _2_EnvelopeSim.vehicle_yaml import load_vehicle_yaml, project_vehicle_yaml
 
     config_path = DEFAULT_YMD_CONFIG
@@ -2774,7 +2827,13 @@ def main() -> None:
     # -------------------------------------------------------------------------
     config = config_to_ymd_config(ymd_report_config)
 
-    result = generate_ymd(vehicle, config)
+    reduced_model = create_model(
+        config.model_dof,
+        load_reduced_vehicle_parameters(vehicle_path),
+    )
+    print(f"  reduced backend = {config.model_dof}DOF QSS")
+
+    result = generate_ymd(vehicle, config, reduced_model=reduced_model)
 
     report_cfg = ymd_report_config.get("report") or {}
     results_dir = ENVELOPE_DIR / "results"
@@ -2817,6 +2876,7 @@ def main() -> None:
             vehicle=vehicle,
             base_config=config,
             speeds=speed_sweep,
+            reduced_model=reduced_model,
         )
         sweep_summary, sweep_rows = summarize_ymd_speed_sweep(sweep_result)
         summary.update(sweep_summary)

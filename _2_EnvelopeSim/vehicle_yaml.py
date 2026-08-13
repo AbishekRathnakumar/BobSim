@@ -20,6 +20,7 @@ import yaml
 
 from _2_EnvelopeSim.GGV.ggv_generation import VehicleParams as GGVVehicleParams
 from _2_EnvelopeSim.YMD.ymd_generation import VehicleParams as YMDVehicleParams
+from _0_Utils.dyn_py.parameters import project_powertrain_limits
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -89,6 +90,10 @@ def project_vehicle_yaml(
         nominal_front_ride_height_m=nominal_front_ride_height_m,
         nominal_rear_ride_height_m=nominal_rear_ride_height_m,
     )
+    powertrain = project_powertrain_limits(
+        vehicle_data,
+        driven_wheel_radius_m=float(vehicle_data["rear"]["wheel"]["radius_m"]),
+    )
 
     shared = {
         "mass": total_mass,
@@ -111,7 +116,9 @@ def project_vehicle_yaml(
 
     ggv = GGVVehicleParams(
         **shared,
-        max_drive_power=80_000.0,
+        max_drive_power=powertrain.peak_power_w,
+        max_drive_force=powertrain.peak_drive_force_n,
+        max_drive_speed=powertrain.maximum_vehicle_speed_mps,
         drive_distribution_front=0.0,
         brake_distribution_front=DEFAULT_BRAKE_DISTRIBUTION_FRONT,
         pdx1=tire["PDX1"],
@@ -142,6 +149,16 @@ def project_vehicle_yaml(
         "fz_max_valid_n": tire["FZMAX"],
         "drive_distribution_front": 0.0,
         "brake_distribution_front": DEFAULT_BRAKE_DISTRIBUTION_FRONT,
+        "peak_drive_power_w": powertrain.peak_power_w,
+        "continuous_drive_power_w": powertrain.continuous_power_w,
+        "hardware_peak_drive_power_w": powertrain.hardware_peak_power_w,
+        "controller_drive_power_limit_w": powertrain.controller_power_limit_w,
+        "peak_motor_torque_nm": powertrain.peak_motor_torque_nm,
+        "continuous_motor_torque_nm": powertrain.continuous_motor_torque_nm,
+        "final_drive_ratio": powertrain.final_drive_ratio,
+        "peak_drive_force_n": powertrain.peak_drive_force_n,
+        "continuous_drive_force_n": powertrain.continuous_drive_force_n,
+        "maximum_drive_speed_mps": powertrain.maximum_vehicle_speed_mps,
     }
     return EnvelopeVehicleProjection(ggv=ggv, ymd=ymd, summary=summary)
 
@@ -407,13 +424,19 @@ def _project_aero(
     cl_a, cd_a = _force_to_aero_area(downforce_n, drag_n, reference_speed)
 
     aero_ref_x = float(aero.get("aero_ref_m", [0.0, 0.0, 0.0])[0])
+    front_x = float(vehicle_data["front"]["suspension"]["wheel_center_m"][0])
     if abs(downforce_n) > 1e-9:
-        cop_from_aero_ref_m = -my_nm / downforce_n
-        cop_from_front_m = _clip(cop_from_aero_ref_m - aero_ref_x, 0.0, wheelbase)
+        total_pitch_about_front_nm = (
+            my_nm + (aero_ref_x - front_x) * downforce_n
+        )
+        cop_from_front_m = -total_pitch_about_front_nm / downforce_n
     else:
         cop_from_front_m = wheelbase * 0.5
 
-    aero_balance_front_map = _clip(1.0 - cop_from_front_m / wheelbase, 0.0, 1.0)
+    # Preserve an inferred CoP outside the wheelbase. Clipping it would change
+    # the aero wrench; the corresponding axle reaction may legitimately be
+    # negative when the CoP is ahead of the front or behind the rear axle.
+    aero_balance_front_map = 1.0 - cop_from_front_m / wheelbase
     aero_balance_front = (
         aero_balance_front_map
         if aero_balance_front_override is None

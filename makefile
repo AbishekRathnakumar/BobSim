@@ -18,6 +18,13 @@ BUILD_VEHICLE_MOS := _3_StandardSim/build_vehicle_sim.mos
 BUILD_FOUR_POST_MOS := _3_StandardSim/build_four_post_sim.mos
 
 SEARCH_TOP ?= 1
+REDUCED_DOF ?= 6
+REDUCED_BOBLIB_CSV ?=
+REDUCED_MBD_DIR ?=
+REDUCED_SUSPENSION_METRICS ?= _3_StandardSim/generated_results/four_post_eval_report_metrics.csv
+LAP_CONFIG ?= _3_StandardSim/LapTimeEval/lap_time_eval_config.yml
+LAP_SCENARIO ?= both
+LAP_DOF ?=
 
 # DOE sweep size overrides. Empty means "use configs/vehicle_architecture.yaml".
 DOE_METHOD ?=
@@ -78,7 +85,9 @@ CLEAN_DOCKER_IMAGE ?= bobdyn/bobsim:latest
 	lint typecheck test regression-invariants regression-baseline ci \
 	shell shell-bobsim shell-standard shell-envelope shell-opt \
 	sync-vehicle standard-build standard-build-four-post standard-regression-four-post \
-	standard-eval-ramp-steer standard-eval-steady-state standard-eval-transient standard-eval-four-post standard-eval-all \
+	standard-eval-ramp-steer standard-eval-steady-state standard-eval-transient standard-eval-four-post standard-eval-all reduced-eval reduced-fidelity-suite reduced-suspension-correlation \
+	lap-eval lap-eval-qss lap-eval-transient lap-eval-all-dof \
+	lap-validation-visuals \
 	envelope-ggv envelope-ymd envelope-all \
 	opt-standard opt-envelope opt-refined opt-search opt-doe-smoke \
 	clean clean-app clean-visual clean-standard clean-envelope clean-opt clean-owned clean-all
@@ -119,6 +128,17 @@ help:
 		'  standard-eval-transient    Run TransientEval' \
 		'  standard-eval-four-post    Run FourPostEval' \
 		'  standard-eval-all          Run all standard evaluations' \
+		'  reduced-eval               Run N-DOF step steer; optionally compare BobLib CSV' \
+		'    REDUCED_DOF=3|6|10|14 REDUCED_BOBLIB_CSV=<result.csv>' \
+		'  reduced-fidelity-suite     Overlay 3/6/10/14DOF discriminating maneuvers' \
+		'    REDUCED_MBD_DIR=<directory containing one BobLib CSV per case>' \
+		'  reduced-suspension-correlation Compare instant links with BobLib FourPost metrics' \
+		'  lap-eval                   Run QSS optimization and forward-transient lap' \
+		'  lap-eval-qss               Run QSS racing-line and speed optimization only' \
+		'  lap-eval-transient         Run transient lap against the optimized QSS reference' \
+		'  lap-eval-all-dof           Run QSS and transient laps for 3/6/10/14DOF' \
+		'  lap-validation-visuals     Validate all DOFs; write QSS/transient figures under temp/' \
+		'    LAP_CONFIG=<path> LAP_SCENARIO=qss|transient|both LAP_DOF=3|6|10|14' \
 		'' \
 		'  envelope-ggv              Generate the GGV envelope' \
 		'  envelope-ymd              Generate the YMD envelope' \
@@ -248,6 +268,37 @@ standard-eval-four-post: standard-build-four-post
 	$(RUN) $(PYTHON) -m _3_StandardSim.FourPostEval.four_post_eval_sim
 
 standard-eval-all: standard-eval-ramp-steer standard-eval-steady-state standard-eval-transient standard-eval-four-post
+
+reduced-eval:
+	$(RUN) $(PYTHON) -m _3_StandardSim.ReducedOrderEval.reduced_order_eval_sim \
+		--dof $(REDUCED_DOF) \
+		$(if $(REDUCED_BOBLIB_CSV),--boblib-csv $(REDUCED_BOBLIB_CSV),)
+
+reduced-fidelity-suite:
+	$(RUN) $(PYTHON) -m _3_StandardSim.ReducedOrderEval.fidelity_suite \
+		$(if $(REDUCED_MBD_DIR),--mbd-directory $(REDUCED_MBD_DIR),)
+
+reduced-suspension-correlation:
+	$(RUN) $(PYTHON) -m _3_StandardSim.ReducedOrderEval.suspension_correlation \
+		--metrics $(REDUCED_SUSPENSION_METRICS)
+
+lap-eval:
+	$(RUN) $(PYTHON) -m _3_StandardSim.LapTimeEval.lap_time_eval_sim \
+		--config $(LAP_CONFIG) --scenario $(LAP_SCENARIO) \
+		$(if $(LAP_DOF),--model-dof $(LAP_DOF),)
+
+lap-eval-qss:
+	$(MAKE) lap-eval LAP_SCENARIO=qss
+
+lap-eval-transient:
+	$(MAKE) lap-eval LAP_SCENARIO=transient
+
+lap-eval-all-dof:
+	$(RUN) $(PYTHON) -m _3_StandardSim.LapTimeEval.lap_time_eval_sim \
+		--config $(LAP_CONFIG) --scenario $(LAP_SCENARIO) --all-dof
+
+lap-validation-visuals:
+	$(RUN) $(PYTHON) -m _3_StandardSim.LapTimeEval.validation_visuals
 
 standard-regression-four-post: regression-baseline
 

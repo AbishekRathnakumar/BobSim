@@ -51,6 +51,7 @@ htmlcov/
 Thumbs.db
 
 # Project-generated outputs
+/temp/
 /results/
 _2_EnvelopeSim/results/**
 !_2_EnvelopeSim/results/

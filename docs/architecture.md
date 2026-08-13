@@ -1,9 +1,10 @@
 # Architecture
 
-BobSim is the **workflow layer**. BobLib (a git submodule) is the **physics
-layer**. BobSim does not contain vehicle physics; it configures BobLib Modelica
-models, builds them with OpenModelica, runs them, and turns the raw output into
-metrics, plots, and reports.
+BobSim is primarily the **workflow layer**. BobLib (a git submodule) is the
+high-fidelity **physics reference**. BobSim also contains the lower-fidelity
+`_0_Utils/dyn_py` equations used for fast envelopes and lap simulation; those
+models are explicitly correlated against BobLib. The surrounding workflows
+configure models, run them, and turn raw output into metrics and reports.
 
 ```
 vehicle.yml ──► _5_App / _0_Utils ──► BobLib Modelica records ──► omc build
@@ -29,6 +30,10 @@ vehicle.yml ──► _5_App / _0_Utils ──► BobLib Modelica records ──
 - `vehicle_templates/`, `tire_templates/`: checked-in architecture and tire
   starting points (`.yml`, `.tir`).
 - `deploy/`: PyInstaller packaging for the desktop build.
+- `dyn_py/`: inspectable 3/6/10/14DOF equations shared by QSS envelopes and
+  transient reduced-order studies.
+- `lap_sim/`: track geometry, GGV speed propagation, racing-line optimization,
+  and the transient path follower.
 - `external/BobLib/`: **the submodule**. See [boblib-submodule.md](boblib-submodule.md).
 
 ### `_1_VisualSim/` — visualization
@@ -42,8 +47,10 @@ quasi-static map generators driven by `*_config.yml` files. `vehicle_loader.py`
 and `vehicle_yaml.py` adapt `vehicle.yml` into envelope inputs.
 
 ### `_3_StandardSim/` — standard vehicle studies
-Four studies, each a directory with a `*_config.yml` and a `*_sim.py`:
-`RampSteerEval`, `SteadyStateEval`, `TransientEval`, `FourPostEval`.
+The BobLib studies each have a `*_config.yml` and a `*_sim.py`:
+`RampSteerEval`, `SteadyStateEval`, `TransientEval`, and `FourPostEval`.
+`ReducedOrderEval` correlates `dyn_py` with those references, while
+`LapTimeEval` composes EnvelopeSim GGV data with shared QSS/transient lap tools.
 
 Two shared runners sit alongside them:
 - `_modelica_runner.py`: drives a compiled OpenModelica executable.
