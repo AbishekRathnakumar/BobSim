@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import os
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, Mapping, cast
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
@@ -508,7 +508,10 @@ def _solve_ax_limit_qss(
     ):
         return float("nan")
 
+    seed_unknowns = zero_trim.unknowns
+
     def feasible(ax: float) -> bool:
+        nonlocal seed_unknowns
         _front_aero, _rear_aero, drag = aero_loads(vehicle, speed)
         required_force = vehicle.mass * ax + drag
         if mode == "drive":
@@ -521,16 +524,20 @@ def _solve_ax_limit_qss(
             speed_mps=speed,
             longitudinal_acceleration_mps2=ax,
             lateral_acceleration_mps2=ay,
+            initial_unknowns=seed_unknowns,
             max_nfev=160,
             tolerance=1e-7,
         )
-        return _trim_is_racing_feasible(
+        accepted = _trim_is_racing_feasible(
             trim,
             model=reduced_model,
             ay=ay,
             max_abs_beta_rad=max_abs_beta_rad,
             max_abs_steering_rad=max_abs_steering_rad,
         )
+        if accepted:
+            seed_unknowns = trim.unknowns
+        return accepted
 
     if mode == "drive":
         lo, hi = 0.0, upper
@@ -583,7 +590,10 @@ def _trim_is_racing_feasible(
         # force implied by applied wheel torque; otherwise fixed brake/drive
         # distribution can be bypassed at the GGV boundary.
         steering = float(trim.inputs.steering_rad)
-        wheel_steering = np.array([steering, steering, 0.0, 0.0])
+        wheel_steering = (
+            np.array([steering, steering, 0.0, 0.0])
+            + np.asarray(trim.output.toe_rad, dtype=float)
+        )
         body_forces = np.asarray(trim.output.wheel_forces_body_n, dtype=float)
         tire_fx = (
             body_forces[:, 0] * np.cos(wheel_steering)
@@ -624,8 +634,10 @@ def solve_lateral_limit(
 
     _front_aero, _rear_aero, drag = aero_loads(vehicle, speed)
     coast_ax = -drag / vehicle.mass
+    seed_unknowns: Mapping[str, float] | None = None
 
     def feasible(ay: float) -> bool:
+        nonlocal seed_unknowns
         if reduced_model is None:
             return is_feasible(
                 vehicle,
@@ -639,16 +651,20 @@ def solve_lateral_limit(
             speed_mps=speed,
             longitudinal_acceleration_mps2=coast_ax,
             lateral_acceleration_mps2=ay,
+            initial_unknowns=seed_unknowns,
             max_nfev=160,
             tolerance=1e-7,
         )
-        return _trim_is_racing_feasible(
+        accepted = _trim_is_racing_feasible(
             trim,
             model=reduced_model,
             ay=ay,
             max_abs_beta_rad=max_abs_beta_rad,
             max_abs_steering_rad=max_abs_steering_rad,
         )
+        if accepted:
+            seed_unknowns = trim.unknowns
+        return accepted
 
     lo, hi = 0.0, float(ay_upper)
     if feasible(hi):

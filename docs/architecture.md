@@ -32,6 +32,8 @@ vehicle.yml ──► _5_App / _0_Utils ──► BobLib Modelica records ──
 - `deploy/`: PyInstaller packaging for the desktop build.
 - `dyn_py/`: inspectable 3/6/10/14DOF equations shared by QSS envelopes and
   transient reduced-order studies.
+- `kin_py/`: nonlinear double-wishbone constraints plus precomputed and exact
+  runtime kinematics backends consumed by `dyn_py`.
 - `lap_sim/`: track geometry, GGV speed propagation, racing-line optimization,
   and the transient path follower.
 - `external/BobLib/`: **the submodule**. See [boblib-submodule.md](boblib-submodule.md).

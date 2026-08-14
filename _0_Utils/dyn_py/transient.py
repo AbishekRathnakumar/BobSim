@@ -72,6 +72,9 @@ def simulate_transient(
     }
     body_acceleration = np.empty((len(solution.t), 3), dtype=float)
     steering = np.empty(len(solution.t), dtype=float)
+    camber = np.empty((len(solution.t), 4), dtype=float)
+    toe = np.empty((len(solution.t), 4), dtype=float)
+    contact_patch = np.empty((len(solution.t), 4, 3), dtype=float)
     for index, (time, state) in enumerate(zip(solution.t, states)):
         model_inputs = input_at(float(time), state)
         output = model.evaluate(state, model_inputs)
@@ -86,6 +89,9 @@ def simulate_transient(
             output.generalized_acceleration[2] if model.dof == 3 else output.generalized_acceleration[5],
         )
         steering[index] = model_inputs.steering_rad
+        camber[index] = output.camber_rad
+        toe[index] = output.toe_rad
+        contact_patch[index] = output.contact_patch_positions_body_m
     signals.update(
         {
             "accX": body_acceleration[:, 0],
@@ -99,6 +105,12 @@ def simulate_transient(
             "roll": signals.get("roll", np.zeros(len(solution.t))),
         }
     )
+    for corner_index, corner in enumerate(("FL", "FR", "RL", "RR")):
+        signals[f"camber{corner}"] = camber[:, corner_index]
+        signals[f"toe{corner}"] = toe[:, corner_index]
+        signals[f"contactPatchX{corner}"] = contact_patch[:, corner_index, 0]
+        signals[f"contactPatchY{corner}"] = contact_patch[:, corner_index, 1]
+        signals[f"contactPatchZ{corner}"] = contact_patch[:, corner_index, 2]
     return TransientResult(
         time_s=np.asarray(solution.t, dtype=float),
         state=states,

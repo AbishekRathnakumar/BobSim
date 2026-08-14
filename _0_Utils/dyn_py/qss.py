@@ -72,6 +72,7 @@ def solve_steady_state(
     yaw_rate_radps: float = 0.0,
     initial_beta_rad: float = 0.0,
     initial_steering_rad: float | None = None,
+    initial_unknowns: Mapping[str, float] | None = None,
     max_nfev: int = 400,
     tolerance: float = 1e-8,
 ) -> QSSResult:
@@ -88,6 +89,7 @@ def solve_steady_state(
         target_acceleration_mps2=None,
         initial_beta_rad=initial_beta_rad,
         initial_steering_rad=initial_steering_rad,
+        initial_unknowns=initial_unknowns,
         max_nfev=max_nfev,
         tolerance=tolerance,
     )
@@ -102,6 +104,7 @@ def solve_acceleration_trim(
     yaw_rate_radps: float = 0.0,
     initial_beta_rad: float = 0.0,
     initial_steering_rad: float | None = None,
+    initial_unknowns: Mapping[str, float] | None = None,
     max_nfev: int = 400,
     tolerance: float = 1e-8,
 ) -> QSSResult:
@@ -117,6 +120,7 @@ def solve_acceleration_trim(
         ),
         initial_beta_rad=initial_beta_rad,
         initial_steering_rad=initial_steering_rad,
+        initial_unknowns=initial_unknowns,
         max_nfev=max_nfev,
         tolerance=tolerance,
     )
@@ -130,6 +134,7 @@ def _solve_trim(
     target_acceleration_mps2: tuple[float, float] | None,
     initial_beta_rad: float,
     initial_steering_rad: float | None,
+    initial_unknowns: Mapping[str, float] | None,
     max_nfev: int,
     tolerance: float,
 ) -> QSSResult:
@@ -165,6 +170,11 @@ def _solve_trim(
         guess.extend((0.0, 0.0, 0.0, 0.0))
         lower.extend((-0.20, -0.20, -0.20, -0.20))
         upper.extend((0.20, 0.20, 0.20, 0.20))
+
+    if initial_unknowns is not None:
+        for index, name in enumerate(names):
+            if name in initial_unknowns:
+                guess[index] = float(initial_unknowns[name])
 
     scales = _residual_scales(model)
 
@@ -239,6 +249,7 @@ def solve_moment_state(
     beta_rad: float,
     steering_rad: float,
     yaw_rate_radps: float = 0.0,
+    initial_unknowns: Mapping[str, float] | None = None,
     max_nfev: int = 300,
     tolerance: float = 1e-8,
 ) -> QSSResult:
@@ -273,6 +284,11 @@ def solve_moment_state(
         guess.extend((0.0, 0.0, 0.0, 0.0))
         lower.extend((-0.20, -0.20, -0.20, -0.20))
         upper.extend((0.20, 0.20, 0.20, 0.20))
+
+    if initial_unknowns is not None:
+        for index, name in enumerate(names):
+            if name in initial_unknowns:
+                guess[index] = float(initial_unknowns[name])
 
     def build(values: FloatArray) -> tuple[FloatArray, ModelInputs]:
         full_values = np.empty(model.dof, dtype=float)

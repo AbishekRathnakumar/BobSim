@@ -5,9 +5,10 @@ quasi-steady envelopes. It is intentionally lower fidelity than BobLib: the
 point is to make assumptions inspectable, run quickly, and quantify where each
 added degree of freedom improves agreement with the Modelica reference.
 
-The implementation is in `_0_Utils/dyn_py/`, alongside the existing
-`_0_Utils/kin_py/` convention. EnvelopeSim and
-StandardSim both import it; it does not import from either higher layer.
+The equations are in `_0_Utils/dyn_py/`; nonlinear suspension geometry and its
+runtime lookup maps are owned by `_0_Utils/kin_py/`. EnvelopeSim and StandardSim
+both import those foundation packages; neither foundation package imports from
+a higher layer.
 
 ## Fidelity ladder
 
@@ -40,10 +41,13 @@ Rigid-body angular acceleration uses the projected full inertia tensor:
 omega_dot = I^-1 (sum(M_body) - omega x (I omega))
 ```
 
-Contact-patch velocity is `v_cg + omega x r_corner`. Tire slip is evaluated in
-each steered wheel frame. The TIR projection preserves load-dependent peak
-friction plus longitudinal and lateral stiffness; a smooth saturation and
-combined-slip ellipse close the reduced tire model.
+Contact-patch position, attitude, and articulation velocity come from the
+active `kin_py` evaluator. Velocity is
+`v_cg + omega x r_contact + (dr_contact/dz) * z_dot`; tire slip is evaluated in
+the resulting individual wheel frames. Bump toe changes wheel heading, contact
+patch migration changes the force moment arm, and camber modifies the
+load-sensitive MF peak and cornering-stiffness projections. A smooth saturation
+and combined-slip ellipse close the reduced tire model.
 
 The 6/10DOF normal loads come from sprung heave/roll/pitch, wheel rates,
 damping, anti-roll stiffness, static preload, and geometric force transmission
@@ -83,13 +87,15 @@ suspension tables, aero maps, and powertrain layout. When available, the
 FourPost metrics CSV supplies measured/projected wheel and anti-roll stiffness;
 the YAML shock tables are the fallback.
 
-## Double-wishbone force transmission
+## Double-wishbone kinematic coupling
 
-The dynamic system receives suspension hardpoints, not hand-entered instant
-centers or jacking coefficients. `_0_Utils/dyn_py/suspension.py` solves the
-upper-arm, lower-arm, upright, and tie-rod constraints across wheel travel. At
-the current corner jounce it constructs reciprocal instantaneous links from the
-contact-patch tangent:
+The dynamic system receives suspension hardpoints, not hand-entered curves,
+instant centers, or jacking coefficients. `_0_Utils/kin_py/lookup.py` uses the
+shared nonlinear `CornerKinematics` constraint solver to derive contact-patch
+and wheel-center migration; camber, toe, caster, KPI, trail, and scrub; and the
+contact-patch tangent across wheel travel. At the current corner jounce,
+`dyn_py` consumes one four-corner kinematic state. The reciprocal instantaneous
+links remain:
 
 ```text
 Fz_geometric / Fx = -dx_contact / dz_contact
@@ -98,8 +104,30 @@ Fz_geometric / Fy = -dy_contact / dz_contact
 
 This is equivalent to the side-view and front-view swing-arm line of action,
 but remains valid when the 3D wishbone pivot axes are swept and a simple 2D
-hardpoint projection is not. Left/right lateral coefficients are mirrored;
-longitudinal coefficients retain their axle sign.
+hardpoint projection is not. Left/right geometry is mirrored at the lookup
+boundary; longitudinal coefficients retain their axle sign.
+
+Two interchangeable backends are available:
+
+- `lookup` (default) solves the hardpoints once at vehicle load, then uses
+  interpolation during QSS and ODE evaluations;
+- `nonlinear` solves each corner and the centered contact-patch derivative
+  inside every force evaluation. It is intended for short correlation runs and
+  as the accuracy reference for choosing a lookup grid.
+
+Run the repeatable trade study or a short exact-kinematics transient with:
+
+```bash
+make reduced-kinematics-benchmark
+make reduced-eval REDUCED_KINEMATICS=nonlinear
+```
+
+On the default vehicle, the 49-point lookup built in about 0.67 s and differed
+from off-grid nonlinear solutions by at most 2.25 micrometers at the contact
+patch, 0.00014 degrees camber, 0.00010 degrees toe, and `4.6e-6` in an
+instant-link coefficient. A 14DOF force evaluation took about 1.5 ms with the
+lookup and 165 ms with in-loop solves on the development machine. Grid density
+has negligible interpolation-time cost, so 49 points remains the default.
 
 Spring/damper and stabilizer-bar forces remain a separate elastic path. Spring
 and damper tables are projected through the BobLib/FourPost motion ratio to an
@@ -219,9 +247,13 @@ transient lap for 3/6/10/14DOF. Inspect the generated figures under
 
 ## Current reduction limits
 
-- Instant-link slopes vary with corner jounce, but camber/toe tire-force
-  effects, compliance, and the detailed individual link loads remain BobLib
-  validation targets.
+- The current map is one-dimensional in jounce. It captures fixed-rack bump
+  steer, but commanded roadwheel steer is added afterward; rack travel,
+  Ackermann, and steer-dependent camber/caster/trail require a future 2D
+  jounce-by-rack map.
+- Pushrod/bellcrank motion ratio remains a static FourPost projection, and
+  compliance plus detailed individual link loads remain BobLib validation
+  targets.
 - The tire is a compact MF-derived saturation model, not the full MF52/MF6.2
   equation set, and has no relaxation-length states.
 - The powertrain is represented by wheel torque in the transient equations;

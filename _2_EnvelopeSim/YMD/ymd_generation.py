@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import os
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Mapping, cast
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
@@ -513,6 +513,7 @@ def generate_ymd(
         print(f"Yaw rate: {config.yaw_rate:.4f} rad/s")
         print("=" * 72, flush=True)
 
+    column_seeds: list[Mapping[str, float] | None] = [None] * len(hwa_vals)
     for i, beta in enumerate(beta_vals):
         if config.verbose:
             print(
@@ -521,14 +522,36 @@ def generate_ymd(
                 flush=True,
             )
 
+        row_seed: Mapping[str, float] | None = None
         for j, hwa in enumerate(hwa_vals):
-            ay, mz, converged = ymd_point(
-                vehicle,
-                config=config,
-                beta=beta,
-                hwa=hwa,
-                reduced_model=reduced_model,
-            )
+            if reduced_model is None:
+                ay, mz, converged = ymd_point(
+                    vehicle,
+                    config=config,
+                    beta=beta,
+                    hwa=hwa,
+                )
+            else:
+                trim = solve_moment_state(
+                    reduced_model,
+                    speed_mps=config.speed,
+                    beta_rad=beta,
+                    steering_rad=hwa / vehicle.steering_ratio,
+                    yaw_rate_radps=config.yaw_rate,
+                    initial_unknowns=(row_seed or column_seeds[j]),
+                    max_nfev=max(50, config.max_iter * 6),
+                    tolerance=config.tol_ay,
+                )
+                velocity = trim.state[reduced_model.dof :]
+                ay = float(
+                    trim.output.generalized_acceleration[1]
+                    + config.yaw_rate * velocity[0]
+                )
+                mz = float(trim.output.body_moment_nm[2])
+                converged = trim.success
+                if converged:
+                    row_seed = trim.unknowns
+                    column_seeds[j] = trim.unknowns
 
             ay_grid[i, j] = ay
             mz_grid[i, j] = mz

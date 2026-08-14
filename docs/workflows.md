@@ -83,6 +83,18 @@ and transient integration. Output lands in
 [lap-time-simulation.md](lap-time-simulation.md) for the track schema,
 optimization objective, and validation interpretation.
 
+Compare precomputed suspension-kinematics grid sizes with an in-loop nonlinear
+constraint solve:
+
+```bash
+make reduced-kinematics-benchmark
+```
+
+The benchmark writes `temp/kinematics_benchmark/summary.json`. Short reduced
+transients can use the nonlinear backend directly with
+`make reduced-eval REDUCED_KINEMATICS=nonlinear`; production envelopes and laps
+should normally retain the lookup backend.
+
 ## Envelopes and sensitivities
 
 ```bash

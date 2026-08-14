@@ -830,7 +830,11 @@ def _validation_fingerprint(
     """Hash every input that can change the disposable validation bundle."""
 
     inputs = [config_path, vehicle_path]
-    for directory in (root / "_0_Utils/dyn_py", root / "_0_Utils/lap_sim"):
+    for directory in (
+        root / "_0_Utils/dyn_py",
+        root / "_0_Utils/kin_py",
+        root / "_0_Utils/lap_sim",
+    ):
         inputs.extend(sorted(directory.glob("*.py")))
     inputs.extend(
         (

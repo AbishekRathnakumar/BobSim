@@ -19,6 +19,7 @@ BUILD_FOUR_POST_MOS := _3_StandardSim/build_four_post_sim.mos
 
 SEARCH_TOP ?= 1
 REDUCED_DOF ?= 6
+REDUCED_KINEMATICS ?= lookup
 REDUCED_BOBLIB_CSV ?=
 REDUCED_MBD_DIR ?=
 REDUCED_SUSPENSION_METRICS ?= _3_StandardSim/generated_results/four_post_eval_report_metrics.csv
@@ -85,7 +86,7 @@ CLEAN_DOCKER_IMAGE ?= bobdyn/bobsim:latest
 	lint typecheck test regression-invariants regression-baseline ci \
 	shell shell-bobsim shell-standard shell-envelope shell-opt \
 	sync-vehicle standard-build standard-build-four-post standard-regression-four-post \
-	standard-eval-ramp-steer standard-eval-steady-state standard-eval-transient standard-eval-four-post standard-eval-all reduced-eval reduced-fidelity-suite reduced-suspension-correlation \
+	standard-eval-ramp-steer standard-eval-steady-state standard-eval-transient standard-eval-four-post standard-eval-all reduced-eval reduced-fidelity-suite reduced-suspension-correlation reduced-kinematics-benchmark \
 	lap-eval lap-eval-qss lap-eval-transient lap-eval-all-dof \
 	lap-validation-visuals \
 	envelope-ggv envelope-ymd envelope-all \
@@ -129,10 +130,11 @@ help:
 		'  standard-eval-four-post    Run FourPostEval' \
 		'  standard-eval-all          Run all standard evaluations' \
 		'  reduced-eval               Run N-DOF step steer; optionally compare BobLib CSV' \
-		'    REDUCED_DOF=3|6|10|14 REDUCED_BOBLIB_CSV=<result.csv>' \
+		'    REDUCED_DOF=3|6|10|14 REDUCED_KINEMATICS=lookup|nonlinear' \
 		'  reduced-fidelity-suite     Overlay 3/6/10/14DOF discriminating maneuvers' \
 		'    REDUCED_MBD_DIR=<directory containing one BobLib CSV per case>' \
 		'  reduced-suspension-correlation Compare instant links with BobLib FourPost metrics' \
+		'  reduced-kinematics-benchmark Compare lookup grids with in-loop nonlinear kinematics' \
 		'  lap-eval                   Run QSS optimization and forward-transient lap' \
 		'  lap-eval-qss               Run QSS racing-line and speed optimization only' \
 		'  lap-eval-transient         Run transient lap against the optimized QSS reference' \
@@ -272,6 +274,7 @@ standard-eval-all: standard-eval-ramp-steer standard-eval-steady-state standard-
 reduced-eval:
 	$(RUN) $(PYTHON) -m _3_StandardSim.ReducedOrderEval.reduced_order_eval_sim \
 		--dof $(REDUCED_DOF) \
+		--kinematics-mode $(REDUCED_KINEMATICS) \
 		$(if $(REDUCED_BOBLIB_CSV),--boblib-csv $(REDUCED_BOBLIB_CSV),)
 
 reduced-fidelity-suite:
@@ -281,6 +284,9 @@ reduced-fidelity-suite:
 reduced-suspension-correlation:
 	$(RUN) $(PYTHON) -m _3_StandardSim.ReducedOrderEval.suspension_correlation \
 		--metrics $(REDUCED_SUSPENSION_METRICS)
+
+reduced-kinematics-benchmark:
+	$(RUN) $(PYTHON) -m _3_StandardSim.ReducedOrderEval.kinematics_benchmark
 
 lap-eval:
 	$(RUN) $(PYTHON) -m _3_StandardSim.LapTimeEval.lap_time_eval_sim \

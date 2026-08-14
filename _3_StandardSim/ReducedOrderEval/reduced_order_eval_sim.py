@@ -20,6 +20,7 @@ from _0_Utils.dyn_py import (
     simulate_transient,
     solve_steady_state,
 )
+from _0_Utils.kin_py import KinematicsMode
 
 
 COMPARISON_SIGNALS = ("velX", "velY", "yawVel", "sideslip", "accX", "accY", "roll")
@@ -35,10 +36,16 @@ def run_step_steer(
     stop_time_s: float = 5.0,
     sample_period_s: float = 0.01,
     vehicle_path: str | Path | None = None,
+    kinematics_mode: KinematicsMode = "lookup",
+    kinematics_sample_count: int = 49,
 ) -> TransientResult:
     """Run the same step-steer shape used by BobLib TransientEval."""
 
-    parameters = load_reduced_vehicle_parameters(vehicle_path)
+    parameters = load_reduced_vehicle_parameters(
+        vehicle_path,
+        kinematics_mode=kinematics_mode,
+        kinematics_sample_count=kinematics_sample_count,
+    )
     model = create_model(dof, parameters)
     initial_trim = solve_steady_state(model, speed_mps=speed_mps)
     if not initial_trim.success:
@@ -97,6 +104,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--stop-time-s", type=float, default=5.0)
     parser.add_argument("--sample-period-s", type=float, default=0.01)
     parser.add_argument("--vehicle", type=Path)
+    parser.add_argument(
+        "--kinematics-mode",
+        choices=("lookup", "nonlinear"),
+        default="lookup",
+    )
+    parser.add_argument("--kinematics-sample-count", type=int, default=49)
     parser.add_argument("--boblib-csv", type=Path)
     parser.add_argument("--metrics-output", type=Path)
     return parser.parse_args()
@@ -114,6 +127,8 @@ def main() -> None:
         stop_time_s=args.stop_time_s,
         sample_period_s=args.sample_period_s,
         vehicle_path=args.vehicle,
+        kinematics_mode=cast(KinematicsMode, args.kinematics_mode),
+        kinematics_sample_count=args.kinematics_sample_count,
     )
     print(f"{dof}DOF transient: {len(result.time_s)} samples; success={result.success}")
     print(

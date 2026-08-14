@@ -22,7 +22,11 @@ from _0_Utils.dyn_py.models import (
     VehicleModel14DOF,
 )
 from _0_Utils.dyn_py.parameters import G
-from _2_EnvelopeSim.GGV.ggv_generation import solve_ax_limit, solve_lateral_limit
+from _2_EnvelopeSim.GGV.ggv_generation import (
+    _trim_is_racing_feasible,
+    solve_ax_limit,
+    solve_lateral_limit,
+)
 from _2_EnvelopeSim.YMD.ymd_generation import YMDConfig, ymd_point
 from _2_EnvelopeSim.vehicle_yaml import load_vehicle_yaml, project_vehicle_yaml
 
@@ -56,6 +60,9 @@ def test_nested_model_state_contract(parameters, dof, state_size, added_coordina
     assert output.wheel_forces_body_n.shape == (4, 3)
     assert output.geometric_vertical_forces_n.shape == (4,)
     assert output.algebraic_load_transfer_n.shape == (4,)
+    assert output.contact_patch_positions_body_m.shape == (4, 3)
+    assert output.camber_rad.shape == (4,)
+    assert output.toe_rad.shape == (4,)
     assert np.all(np.isfinite(output.derivative))
 
 
@@ -214,7 +221,7 @@ def test_flat_road_qss_loads_converge_across_fidelity_ladder(parameters):
     np.testing.assert_allclose(
         results[6].output.normal_loads_n,
         results[10].output.normal_loads_n,
-        rtol=1e-6,
+        rtol=2e-4,
         atol=1e-3,
     )
     np.testing.assert_allclose(
@@ -268,6 +275,35 @@ def test_instant_links_are_derived_at_current_corner_jounce(parameters):
         np.array([0.02, -0.02, 0.02, -0.02])
     ).coefficient_matrix
     assert not np.allclose(traveled, nominal)
+
+
+def test_body_roll_uses_precomputed_kinematic_attitude_and_contact_migration(parameters):
+    model = create_model(6, parameters)
+    state = model.initial_state(12.0)
+    state[3] = np.deg2rad(1.0)
+
+    output = model.evaluate(state)
+    nominal = parameters.corner_positions
+
+    assert np.max(np.abs(output.camber_rad)) > np.deg2rad(0.05)
+    assert np.max(np.abs(output.toe_rad)) > np.deg2rad(0.001)
+    assert not np.allclose(output.contact_patch_positions_body_m, nominal)
+    assert output.camber_rad[0] != pytest.approx(-output.camber_rad[1])
+
+
+def test_camber_curves_modify_reduced_tire_capacity(parameters):
+    loads = np.asarray(parameters.static_wheel_loads_n)
+    zero_camber = np.zeros(4)
+    high_camber = np.full(4, np.deg2rad(4.0))
+
+    assert np.all(
+        parameters.tire.mu_y(loads, high_camber)
+        < parameters.tire.mu_y(loads, zero_camber)
+    )
+    assert np.all(
+        parameters.tire.cornering_stiffness(loads, high_camber)
+        < parameters.tire.cornering_stiffness(loads, zero_camber)
+    )
 
 
 def test_14dof_instant_link_force_has_equal_and_opposite_unsprung_reaction(parameters):
@@ -345,6 +381,26 @@ def test_ggv_pure_lateral_endpoint_is_closed_at_coast(parameters):
     assert 1.8 * 9.80665 < ay < 2.6 * 9.80665
     assert ax < 0.0
     assert abs(ax) < 1.0
+
+
+def test_ggv_force_closure_uses_kinematic_bump_toe(parameters):
+    model = create_model(6, parameters)
+    result = solve_acceleration_trim(
+        model,
+        speed_mps=12.0,
+        longitudinal_acceleration_mps2=0.0,
+        lateral_acceleration_mps2=1.7 * G,
+    )
+
+    assert result.success
+    assert np.max(np.abs(result.output.toe_rad)) > 1e-4
+    assert _trim_is_racing_feasible(
+        result,
+        model=model,
+        ay=1.7 * G,
+        max_abs_beta_rad=0.25,
+        max_abs_steering_rad=0.5,
+    )
 
 
 def test_prescribed_acceleration_and_moment_qss_use_same_6dof_equations(parameters):

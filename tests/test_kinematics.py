@@ -11,6 +11,7 @@ from _3_StandardSim.FourPostEval import four_post_eval_sim as four_post_eval
 from _0_Utils.kin_py import (
     KINEMATIC_CURVE_META,
     CornerKinematics,
+    create_kinematics,
     kinematic_curves_payload,
 )
 from _5_App import kinematics as app_kinematics
@@ -28,6 +29,46 @@ def test_kinematics_model_lives_in_shared_suspension_package() -> None:
 def test_app_kinematics_import_is_compatibility_shim() -> None:
     assert app_kinematics.CornerKinematics is CornerKinematics
     assert app_kinematics.kinematic_curves_payload is kinematic_curves_payload
+
+
+def test_precomputed_vehicle_kinematics_matches_in_loop_nonlinear_solution() -> None:
+    vehicle = yaml.safe_load((ROOT / "vehicle.yml").read_text(encoding="utf-8"))
+    lookup = create_kinematics(vehicle, sample_count=17)
+    nonlinear = create_kinematics(vehicle, mode="nonlinear")
+    jounce = np.array([-0.021, -0.007, 0.014, 0.031])
+
+    interpolated = lookup.at(jounce)
+    exact = nonlinear.at(jounce)
+
+    np.testing.assert_allclose(
+        interpolated.contact_patch_offsets_m,
+        exact.contact_patch_offsets_m,
+        atol=25e-6,
+    )
+    np.testing.assert_allclose(interpolated.camber_rad, exact.camber_rad, atol=3e-5)
+    np.testing.assert_allclose(interpolated.toe_rad, exact.toe_rad, atol=2e-5)
+    np.testing.assert_allclose(
+        interpolated.instant_links.coefficient_matrix,
+        exact.instant_links.coefficient_matrix,
+        atol=6e-5,
+    )
+
+
+def test_vehicle_kinematic_state_mirrors_right_corner_geometry() -> None:
+    vehicle = yaml.safe_load((ROOT / "vehicle.yml").read_text(encoding="utf-8"))
+    state = create_kinematics(vehicle, sample_count=17).at(
+        np.array([0.02, 0.02, -0.015, -0.015])
+    )
+
+    np.testing.assert_allclose(
+        state.contact_patch_offsets_m[0, [0, 2]],
+        state.contact_patch_offsets_m[1, [0, 2]],
+    )
+    assert state.contact_patch_offsets_m[0, 1] == pytest.approx(
+        -state.contact_patch_offsets_m[1, 1]
+    )
+    assert state.toe_rad[0] == pytest.approx(-state.toe_rad[1])
+    assert state.camber_rad[2] == pytest.approx(-state.camber_rad[3])
 
 
 def _direct_quarter_car_vehicle() -> dict[str, object]:

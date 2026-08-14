@@ -19,8 +19,10 @@ from _0_Utils.vehicle_io import (
     tire_templates_root,
     vehicle_yaml_path,
 )
-from _0_Utils.dyn_py.suspension import (
-    DoubleWishboneGeometry,
+from _0_Utils.kin_py.lookup import (
+    KinematicsMode,
+    VehicleKinematics,
+    create_kinematics,
 )
 
 
@@ -40,11 +42,15 @@ class TireParameters:
     pdx2: float
     pdy1: float
     pdy2: float
+    pdy3: float
     pkx1: float
     pkx2: float
     pkx3: float
     pky1: float
     pky2: float
+    pky3: float
+    pvy3: float
+    pvy4: float
     mu_floor: float = 0.8
 
     def mu_x(self, fz_n: FloatArray) -> FloatArray:
@@ -52,10 +58,19 @@ class TireParameters:
         dfz = (fz - self.fz_ref_n) / self.fz_ref_n
         return np.maximum(self.pdx1 + self.pdx2 * dfz, self.mu_floor)
 
-    def mu_y(self, fz_n: FloatArray) -> FloatArray:
+    def mu_y(self, fz_n: FloatArray, camber_rad: FloatArray | None = None) -> FloatArray:
         fz = np.maximum(np.asarray(fz_n, dtype=float), 1.0)
         dfz = (fz - self.fz_ref_n) / self.fz_ref_n
-        return np.maximum(np.abs(self.pdy1 + self.pdy2 * dfz), self.mu_floor)
+        camber = (
+            np.zeros_like(fz)
+            if camber_rad is None
+            else np.asarray(camber_rad, dtype=float)
+        )
+        camber_scale = np.maximum(1.0 - self.pdy3 * camber**2, 0.0)
+        return np.maximum(
+            np.abs(self.pdy1 + self.pdy2 * dfz) * camber_scale,
+            self.mu_floor,
+        )
 
     def longitudinal_stiffness(self, fz_n: FloatArray) -> FloatArray:
         fz = np.maximum(np.asarray(fz_n, dtype=float), 1.0)
@@ -63,13 +78,31 @@ class TireParameters:
         scale = np.exp(self.pkx3 * dfz)
         return np.maximum(fz * (self.pkx1 + self.pkx2 * dfz) * scale, 1.0)
 
-    def cornering_stiffness(self, fz_n: FloatArray) -> FloatArray:
+    def cornering_stiffness(
+        self,
+        fz_n: FloatArray,
+        camber_rad: FloatArray | None = None,
+    ) -> FloatArray:
         fz = np.maximum(np.asarray(fz_n, dtype=float), 1.0)
+        camber = (
+            np.zeros_like(fz)
+            if camber_rad is None
+            else np.asarray(camber_rad, dtype=float)
+        )
         denominator = max(abs(self.pky2) * self.fz_ref_n, 1.0)
         stiffness = abs(self.pky1) * self.fz_ref_n * np.sin(
             2.0 * np.arctan(fz / denominator)
         )
+        stiffness *= np.maximum(1.0 - self.pky3 * np.abs(camber), 0.0)
         return np.maximum(stiffness, 1.0)
+
+    def camber_thrust(self, fz_n: FloatArray, camber_rad: FloatArray) -> FloatArray:
+        """Return the camber-only MF lateral-force shift."""
+
+        fz = np.maximum(np.asarray(fz_n, dtype=float), 1.0)
+        camber = np.asarray(camber_rad, dtype=float)
+        dfz = (fz - self.fz_ref_n) / self.fz_ref_n
+        return fz * (self.pvy3 + self.pvy4 * dfz) * camber
 
 
 @dataclass(frozen=True)
@@ -104,7 +137,7 @@ class ReducedVehicleParameters:
     suspension_stiffness_n_per_m: tuple[float, float, float, float]
     suspension_damping_n_s_per_m: tuple[float, float, float, float]
     antiroll_stiffness_nm_per_rad: tuple[float, float]
-    double_wishbone: DoubleWishboneGeometry
+    kinematics: VehicleKinematics
     tire_vertical_stiffness_n_per_m: tuple[float, float, float, float]
     tire_vertical_damping_n_s_per_m: tuple[float, float, float, float]
     tire: TireParameters
@@ -121,6 +154,12 @@ class ReducedVehicleParameters:
     maximum_drive_speed_mps: float
     drive_distribution_front: float
     brake_distribution_front: float
+
+    @property
+    def double_wishbone(self) -> VehicleKinematics:
+        """Compatibility alias for the original instant-link-only field."""
+
+        return self.kinematics
 
     @property
     def inertia(self) -> FloatArray:
@@ -152,6 +191,9 @@ def load_reduced_vehicle_parameters(
     path: str | Path | None = None,
     *,
     four_post_metrics_path: str | Path | None = None,
+    kinematics_mode: KinematicsMode = "lookup",
+    kinematics_sample_count: int = 49,
+    kinematics_travel_limit_m: float = 0.06,
 ) -> ReducedVehicleParameters:
     """Load the active vehicle and project it into the nested N-DOF family."""
 
@@ -205,7 +247,12 @@ def load_reduced_vehicle_parameters(
         else root / "_3_StandardSim/generated_results/four_post_eval_report_metrics.csv"
     )
     metrics = _load_metrics(metrics_path)
-    double_wishbone = DoubleWishboneGeometry.from_vehicle(data)
+    kinematics = create_kinematics(
+        data,
+        mode=kinematics_mode,
+        sample_count=kinematics_sample_count,
+        travel_limit_m=kinematics_travel_limit_m,
+    )
     front_spring_rate = _wheel_rate(data, "front", metrics, track=2.0 * abs(front_wc[1]))
     rear_spring_rate = _wheel_rate(data, "rear", metrics, track=2.0 * abs(rear_wc[1]))
     front_damping = _wheel_damping(data, "front", metrics)
@@ -222,11 +269,15 @@ def load_reduced_vehicle_parameters(
         pdx2=_tir_float(tire_values, "PDX2"),
         pdy1=_tir_float(tire_values, "PDY1"),
         pdy2=_tir_float(tire_values, "PDY2"),
+        pdy3=_tir_float(tire_values, "PDY3"),
         pkx1=_tir_float(tire_values, "PKX1"),
         pkx2=_tir_float(tire_values, "PKX2"),
         pkx3=_tir_float(tire_values, "PKX3"),
         pky1=_tir_float(tire_values, "PKY1"),
         pky2=_tir_float(tire_values, "PKY2"),
+        pky3=_tir_float(tire_values, "PKY3"),
+        pvy3=_tir_float(tire_values, "PVY3"),
+        pvy4=_tir_float(tire_values, "PVY4"),
     )
 
     cl_area, cd_area, aero_balance, aero_cop, aero_drag_application = _project_aero(
@@ -276,7 +327,7 @@ def load_reduced_vehicle_parameters(
             metrics.get("arb_roll_stiffness_front_Nm_per_rad", 0.0),
             metrics.get("arb_roll_stiffness_rear_Nm_per_rad", 0.0),
         ),
-        double_wishbone=double_wishbone,
+        kinematics=kinematics,
         tire_vertical_stiffness_n_per_m=(
             float(data["front"]["tire"]["vertical_stiffness_n_per_m"]),
             float(data["front"]["tire"]["vertical_stiffness_n_per_m"]),

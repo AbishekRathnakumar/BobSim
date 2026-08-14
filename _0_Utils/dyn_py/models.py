@@ -26,6 +26,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from _0_Utils.dyn_py.parameters import G, ReducedVehicleParameters
+from _0_Utils.kin_py.lookup import VehicleKinematicState
 
 
 FloatArray = NDArray[np.float64]
@@ -57,6 +58,9 @@ class ModelOutput:
     suspension_forces_n: FloatArray
     geometric_vertical_forces_n: FloatArray
     algebraic_load_transfer_n: FloatArray
+    contact_patch_positions_body_m: FloatArray
+    camber_rad: FloatArray
+    toe_rad: FloatArray
 
 
 @dataclass(frozen=True)
@@ -67,6 +71,7 @@ class VerticalForceState:
     suspension_forces_n: FloatArray
     unsprung_acceleration_mps2: FloatArray
     jounce_m: FloatArray
+    jounce_speed_mps: FloatArray
 
 
 @dataclass
@@ -120,16 +125,31 @@ class VehicleDynamicsSystem(ABC):
         velocities = x[self.dof :]
         body_coordinates, body_velocities = self._body_state(coordinates, velocities)
         rotation = _body_to_world_rotation(body_coordinates[3:6])
-        corner_positions = self.parameters.corner_positions
-        corner_velocities = body_velocities[:3] + np.cross(
+        vertical = self._vertical_forces(
+            coordinates,
+            velocities,
+            body_coordinates,
+            body_velocities,
+            rotation,
+            inputs,
+        )
+        kinematics = self.parameters.kinematics.at(vertical.jounce_m)
+        corner_positions = (
+            self.parameters.corner_positions + kinematics.contact_patch_offsets_m
+        )
+        rigid_corner_velocities = body_velocities[:3] + np.cross(
             np.broadcast_to(body_velocities[3:6], corner_positions.shape),
             corner_positions,
         )
+        articulation_velocities = (
+            kinematics.contact_patch_tangents * vertical.jounce_speed_mps[:, None]
+        )
+        corner_velocities = rigid_corner_velocities + articulation_velocities
 
         steering = np.array(
             [inputs.steering_rad, inputs.steering_rad, 0.0, 0.0],
             dtype=float,
-        )
+        ) + kinematics.toe_rad
         cos_delta = np.cos(steering)
         sin_delta = np.sin(steering)
         wheel_longitudinal_speed = (
@@ -143,14 +163,6 @@ class VehicleDynamicsSystem(ABC):
             np.maximum(np.abs(wheel_longitudinal_speed), 0.25),
         )
 
-        vertical = self._vertical_forces(
-            coordinates,
-            velocities,
-            body_coordinates,
-            body_velocities,
-            rotation,
-            inputs,
-        )
         normal_loads = np.maximum(vertical.normal_loads_n, 0.0)
         suspension_forces = vertical.suspension_forces_n
         unsprung_accel = vertical.unsprung_acceleration_mps2
@@ -167,6 +179,7 @@ class VehicleDynamicsSystem(ABC):
                 normal_loads,
                 slip_angles,
                 slip_ratios,
+                kinematics.camber_rad,
                 inputs,
             )
             fx_body = fx_tire * cos_delta - fy_tire * sin_delta
@@ -174,7 +187,7 @@ class VehicleDynamicsSystem(ABC):
             geometric_vertical = self._geometric_vertical_forces(
                 fx_body,
                 fy_body,
-                vertical.jounce_m,
+                kinematics,
             )
             algebraic_load_transfer = self._algebraic_load_transfer(
                 fx_body,
@@ -200,6 +213,7 @@ class VehicleDynamicsSystem(ABC):
             normal_loads,
             slip_angles,
             slip_ratios,
+            kinematics.camber_rad,
             inputs,
         )
         fx_body = fx_tire * cos_delta - fy_tire * sin_delta
@@ -207,7 +221,7 @@ class VehicleDynamicsSystem(ABC):
         geometric_vertical = self._geometric_vertical_forces(
             fx_body,
             fy_body,
-            vertical.jounce_m,
+            kinematics,
         )
         algebraic_load_transfer = self._algebraic_load_transfer(
             fx_body,
@@ -271,6 +285,9 @@ class VehicleDynamicsSystem(ABC):
             suspension_forces_n=suspension_forces,
             geometric_vertical_forces_n=geometric_vertical,
             algebraic_load_transfer_n=algebraic_load_transfer,
+            contact_patch_positions_body_m=corner_positions,
+            camber_rad=kinematics.camber_rad,
+            toe_rad=kinematics.toe_rad,
         )
         self._last_output = output
         return output
@@ -308,17 +325,19 @@ class VehicleDynamicsSystem(ABC):
         normal_loads: FloatArray,
         slip_angles: FloatArray,
         slip_ratios: FloatArray,
+        camber_rad: FloatArray,
         inputs: ModelInputs,
     ) -> tuple[FloatArray, FloatArray]:
         """Evaluate smooth combined-slip forces in each steered wheel frame."""
 
         tire = self.parameters.tire
         fx_capacity = tire.mu_x(normal_loads) * normal_loads
-        fy_capacity = tire.mu_y(normal_loads) * normal_loads
+        fy_capacity = tire.mu_y(normal_loads, camber_rad) * normal_loads
         fy_tire = fy_capacity * np.tanh(
-            tire.cornering_stiffness(normal_loads) * slip_angles
+            tire.cornering_stiffness(normal_loads, camber_rad) * slip_angles
             / np.maximum(fy_capacity, 1.0)
         )
+        fy_tire += tire.camber_thrust(normal_loads, camber_rad)
         fx_tire = self._longitudinal_tire_force(
             normal_loads,
             slip_ratios,
@@ -336,11 +355,11 @@ class VehicleDynamicsSystem(ABC):
         self,
         fx_body: FloatArray,
         fy_body: FloatArray,
-        jounce_m: FloatArray,
+        kinematics: VehicleKinematicState,
     ) -> FloatArray:
         """Return instant-link jacking forces; the planar model has none."""
 
-        del fx_body, fy_body, jounce_m
+        del fx_body, fy_body, kinematics
         return np.zeros(4)
 
     def _closed_normal_loads(
@@ -625,7 +644,13 @@ class VehicleModel3DOF(VehicleDynamicsSystem):
             float(aero_moment[0]),
             front_share,
         )
-        return VerticalForceState(loads, loads.copy(), np.zeros(4), np.zeros(4))
+        return VerticalForceState(
+            loads,
+            loads.copy(),
+            np.zeros(4),
+            np.zeros(4),
+            np.zeros(4),
+        )
 
     def _algebraic_load_transfer(
         self,
@@ -794,18 +819,18 @@ class VehicleModel6DOF(VehicleModel3DOF):
             suspension_forces,
             np.zeros(4),
             compression,
+            -speed,
         )
 
     def _geometric_vertical_forces(
         self,
         fx_body: FloatArray,
         fy_body: FloatArray,
-        jounce_m: FloatArray,
+        kinematics: VehicleKinematicState,
     ) -> FloatArray:
         """Transmit tire forces through nominal double-wishbone instant links."""
 
-        instant_links = self.parameters.double_wishbone.instant_links_at(jounce_m)
-        return instant_links.geometric_vertical_forces(fx_body, fy_body)
+        return kinematics.instant_links.geometric_vertical_forces(fx_body, fy_body)
 
     def _closed_normal_loads(
         self,
@@ -1032,6 +1057,7 @@ class VehicleModel14DOF(VehicleModel10DOF):
             suspension_forces,
             unsprung_accel,
             compression,
+            unsprung_speed - speed,
         )
 
     def _body_mass_properties(self) -> tuple[float, FloatArray]:
