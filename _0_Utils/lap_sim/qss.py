@@ -226,7 +226,10 @@ def _slice_longitudinal_limit(
 
 
 def _slice_lateral_limit(item: _GGVSlice) -> float:
-    finite = np.isfinite(item.ax_accel_mps2) | np.isfinite(item.ax_brake_mps2)
+    # A steady corner must balance drag with positive drive force.  The brake
+    # branch can have a different lateral domain and must not set the
+    # constant-speed cornering cap.
+    finite = np.isfinite(item.ax_accel_mps2)
     if not np.any(finite):
         return 0.0
     return float(np.max(item.ay_mps2[finite]))

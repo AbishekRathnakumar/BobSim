@@ -22,8 +22,10 @@ from _0_Utils.dyn_py.models import (
 from _0_Utils.dyn_py.parameters import (
     CORNERS,
     PowertrainLimits,
+    ReducedVehicleOverrides,
     ReducedVehicleParameters,
     TireParameters,
+    apply_reduced_vehicle_overrides,
     load_reduced_vehicle_parameters,
     project_powertrain_limits,
 )
@@ -56,6 +58,7 @@ __all__ = [
     "ModelOutput",
     "PowertrainLimits",
     "QSSResult",
+    "ReducedVehicleOverrides",
     "ReducedVehicleParameters",
     "TireParameters",
     "TransientResult",
@@ -64,6 +67,7 @@ __all__ = [
     "VehicleModel6DOF",
     "VehicleModel10DOF",
     "VehicleModel14DOF",
+    "apply_reduced_vehicle_overrides",
     "compare_transient_signals",
     "create_model",
     "load_reduced_vehicle_parameters",

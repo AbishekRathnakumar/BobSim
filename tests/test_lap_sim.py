@@ -126,6 +126,26 @@ def test_qss_profile_respects_gvv_acceleration_boundaries(
             assert ax >= limit - 1e-6
 
 
+def test_lateral_limit_uses_sustainable_drive_domain_not_brake_domain() -> None:
+    speed = np.array([5.0, 15.0])
+    ay = np.array([0.0, 4.0, 8.0, 10.0])
+    acceleration = np.array(
+        [
+            [3.0, 2.0, 0.0, np.nan],
+            [3.0, 2.0, 0.0, np.nan],
+        ]
+    )
+    braking = np.array(
+        [
+            [-6.0, -5.0, -2.0, 0.0],
+            [-6.0, -5.0, -2.0, 0.0],
+        ]
+    )
+    ggv = GGVMap.from_arrays(speed, ay, acceleration, braking)
+
+    assert ggv.lateral_limit(10.0) == pytest.approx(8.0)
+
+
 def test_minimum_time_line_keeps_best_qss_candidate(
     circular_corridor: TrackCorridor,
     synthetic_ggv: GGVMap,

@@ -21,9 +21,11 @@ a full Magic Formula combined-slip tire solver or full FMU trim solve.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import csv
 from dataclasses import dataclass
 from datetime import datetime
+import math
 import os
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -45,6 +47,11 @@ IN_TO_M = 0.0254
 LB_TO_KG = 0.45359237
 LBF_PER_IN_TO_N_PER_M = 175.12683524647636
 MPH_TO_MPS = 0.44704
+# A reduced-QSS trim can report a narrow nonconvergence hole, then converge
+# again on the same racing-feasible high-ay branch.  A 0.01 g descending scan
+# is fine enough to detect the observed branch while remaining small relative
+# to a complete GGV solve; the selected island edge is refined below.
+LATERAL_LIMIT_SCAN_STEP_G = 0.01
 GGV_DIR = Path(__file__).resolve().parent
 ENVELOPE_DIR = GGV_DIR.parent
 REPO_ROOT = ENVELOPE_DIR.parent
@@ -132,6 +139,11 @@ class GGVConfig:
 
     # Warn if calculated tire normal loads leave .tir validated range.
     warn_tire_load_range: bool = True
+
+    # Track solvers clamp speed to the sustainable drive-supported lateral
+    # boundary, so brake-only rows beyond it are unreachable. Preserve the
+    # full GGV by default; track-study callers can skip those expensive rows.
+    track_relevant_lateral_domain_only: bool = False
 
 
 @dataclass
@@ -263,9 +275,7 @@ def wheel_loads(
     total_lat_transfer_moment = vehicle.mass * ay * vehicle.cg_height
 
     front_lat_transfer = vehicle.lltd * total_lat_transfer_moment / vehicle.track_front
-    rear_lat_transfer = (
-        (1.0 - vehicle.lltd) * total_lat_transfer_moment / vehicle.track_rear
-    )
+    rear_lat_transfer = (1.0 - vehicle.lltd) * total_lat_transfer_moment / vehicle.track_rear
 
     # Per-wheel loads
     fl = 0.5 * fz_front - 0.5 * front_lat_transfer
@@ -456,10 +466,7 @@ def solve_ax_limit(
 
     ax_values = np.asarray(ax_grid, dtype=float)
     feasible = np.array(
-        [
-            is_feasible(vehicle, speed=speed, ax=ax, ay=ay, mode=mode)
-            for ax in ax_values
-        ],
+        [is_feasible(vehicle, speed=speed, ax=ax, ay=ay, mode=mode) for ax in ax_values],
         dtype=bool,
     )
 
@@ -491,49 +498,46 @@ def _solve_ax_limit_qss(
     ax_values = np.asarray(ax_grid, dtype=float)
     lower = float(np.min(ax_values))
     upper = float(np.max(ax_values))
-    zero_trim = solve_acceleration_trim(
-        reduced_model,
-        speed_mps=speed,
-        longitudinal_acceleration_mps2=0.0,
-        lateral_acceleration_mps2=ay,
-        max_nfev=120,
-        tolerance=1e-7,
-    )
-    if not _trim_is_racing_feasible(
-        zero_trim,
-        model=reduced_model,
-        ay=ay,
-        max_abs_beta_rad=max_abs_beta_rad,
-        max_abs_steering_rad=max_abs_steering_rad,
-    ):
-        return float("nan")
+    trim_cache: dict[float, Any] = {}
 
-    def feasible(ax: float) -> bool:
-        _front_aero, _rear_aero, drag = aero_loads(vehicle, speed)
-        required_force = vehicle.mass * ax + drag
-        if mode == "drive":
-            if required_force < 0.0 or required_force > powertrain_force_limit(vehicle, speed):
-                return False
-        elif required_force > 0.0 or abs(required_force) > vehicle.max_brake_force:
-            return False
-        trim = solve_acceleration_trim(
-            reduced_model,
-            speed_mps=speed,
-            longitudinal_acceleration_mps2=ax,
-            lateral_acceleration_mps2=ay,
-            max_nfev=160,
-            tolerance=1e-7,
-        )
+    def trim_at(ax: float) -> Any:
+        key = float(ax)
+        if key not in trim_cache:
+            trim_cache[key] = solve_acceleration_trim(
+                reduced_model,
+                speed_mps=speed,
+                longitudinal_acceleration_mps2=key,
+                lateral_acceleration_mps2=ay,
+                max_nfev=160,
+                tolerance=1e-7,
+            )
+        return trim_cache[key]
+
+    def racing_feasible(ax: float) -> bool:
         return _trim_is_racing_feasible(
-            trim,
+            trim_at(ax),
             model=reduced_model,
             ay=ay,
             max_abs_beta_rad=max_abs_beta_rad,
             max_abs_steering_rad=max_abs_steering_rad,
         )
 
+    def actuator_feasible(ax: float) -> bool:
+        return _trim_actuator_is_feasible(
+            trim_at(ax),
+            model=reduced_model,
+            vehicle=vehicle,
+            speed=speed,
+            mode=mode,
+        )
+
+    def feasible(ax: float) -> bool:
+        return racing_feasible(ax) and actuator_feasible(ax)
+
     if mode == "drive":
         lo, hi = 0.0, upper
+        if not feasible(lo):
+            return float("nan")
         if feasible(hi):
             return hi
         for _ in range(ax_binary_iterations):
@@ -544,20 +548,66 @@ def _solve_ax_limit_qss(
                 hi = midpoint
         return lo
 
-    _front_aero, _rear_aero, drag = aero_loads(vehicle, speed)
     lo = lower
-    hi = min(0.0, -drag / vehicle.mass)
-    if not feasible(hi):
-        return float("nan")
     if feasible(lo):
         return lo
+    coarse_candidates = sorted(
+        {
+            0.0,
+            *(float(value) for value in np.linspace(0.0, lower, 65)),
+            *(lower * (2.0**-exponent) for exponent in range(10, 0, -1)),
+        },
+        reverse=True,
+    )
+    dense_candidates = sorted(
+        {
+            0.0,
+            *(float(value) for value in ax_values if lower <= float(value) <= 0.0),
+        },
+        reverse=True,
+    )
+
+    def find_feasible_seed(candidates: list[float]) -> tuple[float | None, bool]:
+        previous = candidates[0]
+        previous_actuator_feasible = actuator_feasible(previous)
+        saw_racing_feasible = racing_feasible(previous)
+        if previous_actuator_feasible and saw_racing_feasible:
+            return previous, True
+        for candidate in candidates[1:]:
+            candidate_actuator_feasible = actuator_feasible(candidate)
+            if candidate_actuator_feasible and not previous_actuator_feasible:
+                outside = previous
+                inside = candidate
+                for _ in range(8):
+                    midpoint = 0.5 * (outside + inside)
+                    if actuator_feasible(midpoint):
+                        inside = midpoint
+                    else:
+                        outside = midpoint
+                inside_racing_feasible = racing_feasible(inside)
+                saw_racing_feasible = saw_racing_feasible or inside_racing_feasible
+                if inside_racing_feasible:
+                    return inside, True
+            candidate_racing_feasible = racing_feasible(candidate)
+            saw_racing_feasible = saw_racing_feasible or candidate_racing_feasible
+            if candidate_actuator_feasible and candidate_racing_feasible:
+                return candidate, True
+            previous = candidate
+            previous_actuator_feasible = candidate_actuator_feasible
+        return None, saw_racing_feasible
+
+    brake_hi, coarse_saw_racing_feasible = find_feasible_seed(coarse_candidates)
+    if brake_hi is None and coarse_saw_racing_feasible:
+        brake_hi, _dense_saw_racing_feasible = find_feasible_seed(dense_candidates)
+    if brake_hi is None:
+        return float("nan")
     for _ in range(ax_binary_iterations):
-        midpoint = 0.5 * (lo + hi)
+        midpoint = 0.5 * (lo + brake_hi)
         if feasible(midpoint):
-            hi = midpoint
+            brake_hi = midpoint
         else:
             lo = midpoint
-    return hi
+    return brake_hi
 
 
 def _trim_is_racing_feasible(
@@ -585,10 +635,7 @@ def _trim_is_racing_feasible(
         steering = float(trim.inputs.steering_rad)
         wheel_steering = np.array([steering, steering, 0.0, 0.0])
         body_forces = np.asarray(trim.output.wheel_forces_body_n, dtype=float)
-        tire_fx = (
-            body_forces[:, 0] * np.cos(wheel_steering)
-            + body_forces[:, 1] * np.sin(wheel_steering)
-        )
+        tire_fx = body_forces[:, 0] * np.cos(wheel_steering) + body_forces[:, 1] * np.sin(wheel_steering)
         requested_fx = np.asarray(trim.inputs.wheel_torques_nm, dtype=float) / np.asarray(
             model.parameters.wheel_radius_m,
             dtype=float,
@@ -604,6 +651,263 @@ def _trim_is_racing_feasible(
     )
 
 
+def _trim_actuator_is_feasible(
+    trim: Any,
+    *,
+    model: ReducedVehicleModel,
+    vehicle: VehicleParams,
+    speed: float,
+    mode: Literal["drive", "brake"],
+) -> bool:
+    """Validate solved wheel torque against the external actuator limits."""
+
+    wheel_force = float(
+        np.sum(
+            np.asarray(trim.inputs.wheel_torques_nm, dtype=float)
+            / np.asarray(model.parameters.wheel_radius_m, dtype=float)
+        )
+    )
+    sign_tolerance_n = 1e-6
+    if mode == "drive":
+        force_limit = powertrain_force_limit(vehicle, speed)
+        limit_tolerance_n = max(1e-6, 1e-6 * abs(force_limit)) if np.isfinite(force_limit) else 0.0
+        return bool(wheel_force >= -sign_tolerance_n and wheel_force <= force_limit + limit_tolerance_n)
+    limit_tolerance_n = max(1e-6, 1e-6 * abs(vehicle.max_brake_force)) if np.isfinite(vehicle.max_brake_force) else 0.0
+    return bool(wheel_force <= sign_tolerance_n and abs(wheel_force) <= vehicle.max_brake_force + limit_tolerance_n)
+
+
+def _largest_feasible_value(
+    feasible: Callable[[float], bool],
+    *,
+    lower: float,
+    upper: float,
+    scan_step: float,
+    binary_iterations: int,
+    local_feasible_factory: Callable[[float], Callable[[float], bool]] | None = None,
+) -> float:
+    """Return the upper edge of the highest broad feasible interval.
+
+    A single bisection is valid only when feasibility is monotonic.  Nonlinear
+    reduced-QSS trims can instead contain narrow numerical nonconvergence holes
+    below a valid high-acceleration branch.  Scan from the requested upper
+    bound downward so the first feasible seed belongs to the highest resolved
+    interval, then use bisection only across that interval's local upper edge.
+
+    A feasible coarse seed is checked locally rather than requiring two
+    adjacent coarse samples.  The local search refines the interval's upper
+    edge, then either certifies a contiguous feasible span of ``scan_step`` or
+    brackets and refines the lower edge and rejects a narrower island.  This
+    makes the width test independent of the coarse-grid phase.
+
+    Stateful trim solvers can provide ``local_feasible_factory`` so each local
+    search starts from the converged seed associated with its coarse anchor.
+    The upper and lower searches receive separate predicates, preventing one
+    bisection's continuation history from changing the other one's result.
+    """
+
+    lower = float(lower)
+    upper = float(upper)
+    scan_step = float(scan_step)
+    if not np.isfinite(lower) or not np.isfinite(upper) or upper < lower:
+        raise ValueError("Lateral-limit bounds must be finite and ordered.")
+    if not np.isfinite(scan_step) or scan_step <= 0.0:
+        raise ValueError("Lateral-limit scan step must be finite and positive.")
+
+    cache: dict[float, bool] = {}
+
+    def check(value: float) -> bool:
+        key = float(value)
+        if key not in cache:
+            cache[key] = bool(feasible(key))
+        return cache[key]
+
+    if math.isclose(lower, upper, rel_tol=0.0, abs_tol=0.0):
+        return lower if check(lower) else float("nan")
+
+    refinement_iterations = binary_iterations + 2
+    local_probe_step = 0.25 * scan_step
+    width_tolerance = max(1e-12, 1e-6 * scan_step)
+
+    def make_local_feasible(anchor: float) -> Callable[[float], bool]:
+        if local_feasible_factory is not None:
+            return local_feasible_factory(anchor)
+
+        local_cache: dict[float, bool] = {float(anchor): True}
+
+        def local_feasible(value: float) -> bool:
+            key = float(value)
+            if key not in local_cache:
+                local_cache[key] = bool(feasible(key))
+            return local_cache[key]
+
+        return local_feasible
+
+    def refine_upper_edge(
+        local_feasible: Callable[[float], bool],
+        *,
+        feasible_below: float,
+        infeasible_above: float,
+    ) -> float:
+        inside = feasible_below
+        outside = infeasible_above
+        for _ in range(refinement_iterations):
+            midpoint = 0.5 * (inside + outside)
+            if local_feasible(midpoint):
+                inside = midpoint
+            else:
+                outside = midpoint
+        return inside
+
+    def refine_lower_edge(
+        local_feasible: Callable[[float], bool],
+        *,
+        feasible_above: float,
+        infeasible_below: float,
+    ) -> float:
+        inside = feasible_above
+        outside = infeasible_below
+        for _ in range(refinement_iterations):
+            midpoint = 0.5 * (inside + outside)
+            if local_feasible(midpoint):
+                inside = midpoint
+            else:
+                outside = midpoint
+        return inside
+
+    def confirm_interval(
+        *,
+        interval_top: float,
+        anchor: float,
+        infeasible_above: float | None,
+    ) -> float | None:
+        upper_feasible = make_local_feasible(anchor)
+        current = anchor
+        while current < interval_top:
+            candidate = min(interval_top, current + local_probe_step)
+            if not upper_feasible(candidate):
+                return None
+            current = candidate
+
+        if infeasible_above is None:
+            upper_edge = upper
+        else:
+            upper_edge = refine_upper_edge(
+                upper_feasible,
+                feasible_below=interval_top,
+                infeasible_above=infeasible_above,
+            )
+
+        # Starting again from the exact same coarse-anchor seed makes the
+        # measured interval width independent of the upper-edge bisection.
+        lower_feasible = make_local_feasible(anchor)
+        target = max(lower, upper_edge - scan_step)
+        current = anchor
+        while current > target:
+            candidate = max(target, current - local_probe_step)
+            if lower_feasible(candidate):
+                current = candidate
+                continue
+
+            lower_edge = refine_lower_edge(
+                lower_feasible,
+                feasible_above=current,
+                infeasible_below=candidate,
+            )
+            if upper_edge - lower_edge >= scan_step - width_tolerance:
+                return upper_edge
+            return None
+
+        if upper_edge - target >= scan_step - width_tolerance:
+            return upper_edge
+
+        # Only relax the width requirement when the entire requested domain
+        # is narrower than one scan step.  A tiny island attached to ``lower``
+        # remains unresolved and falls back to the exact lower seed below.
+        if upper - lower < scan_step - width_tolerance:
+            return upper_edge
+        return None
+
+    interval_count = max(1, int(math.ceil((upper - lower) / scan_step)))
+    previous_value: float | None = None
+    feasible_run_top: float | None = None
+    feasible_run_bottom: float | None = None
+    infeasible_above_run: float | None = None
+    feasible_run_length = 0
+    for candidate in np.linspace(upper, lower, interval_count + 1):
+        candidate_value = float(candidate)
+        if not check(candidate_value):
+            if feasible_run_length == 1:
+                if feasible_run_top is None or feasible_run_bottom is None:
+                    raise RuntimeError("Missing feasible lateral interval anchor.")
+                interval_edge = confirm_interval(
+                    interval_top=feasible_run_top,
+                    anchor=feasible_run_bottom,
+                    infeasible_above=infeasible_above_run,
+                )
+                if interval_edge is not None:
+                    return interval_edge
+
+            feasible_run_top = None
+            feasible_run_bottom = None
+            infeasible_above_run = None
+            feasible_run_length = 0
+            previous_value = candidate_value
+            continue
+
+        if feasible_run_length == 0:
+            feasible_run_top = candidate_value
+            infeasible_above_run = previous_value
+        feasible_run_bottom = candidate_value
+        feasible_run_length += 1
+        previous_value = candidate_value
+        if feasible_run_length < 2:
+            continue
+
+        if feasible_run_top is None or feasible_run_bottom is None:
+            raise RuntimeError("Missing feasible lateral interval bounds.")
+        interval_edge = confirm_interval(
+            interval_top=feasible_run_top,
+            anchor=feasible_run_bottom,
+            infeasible_above=infeasible_above_run,
+        )
+        if interval_edge is not None:
+            return interval_edge
+
+    if feasible_run_length == 1:
+        if feasible_run_top is None or feasible_run_bottom is None:
+            raise RuntimeError("Missing feasible lateral interval anchor.")
+        interval_edge = confirm_interval(
+            interval_top=feasible_run_top,
+            anchor=feasible_run_bottom,
+            infeasible_above=infeasible_above_run,
+        )
+        if interval_edge is not None:
+            return interval_edge
+
+    # Preserve an isolated exact lower seed without manufacturing a
+    # sub-resolution interval. If even the lower bound is infeasible, there is
+    # no usable lateral domain.
+    return lower if check(lower) else float("nan")
+
+
+def _converged_lateral_trim_seed(trim: Any) -> tuple[float, float] | None:
+    """Return a safe beta/steer continuation seed from a converged trim.
+
+    A converged root may still fail the racing, wheel-load, tire-force, or
+    actuator checks.  It is never accepted on that basis, but its bounded
+    beta/steer coordinates can safely guide the adjacent lower-ay solve back
+    to the same continuous equilibrium branch.
+    """
+
+    if not trim.success:
+        return None
+    beta = float(trim.unknowns["beta_rad"])
+    steering = float(trim.unknowns["steering_rad"])
+    if not np.all(np.isfinite((beta, steering))):
+        return None
+    return beta, steering
+
+
 def solve_lateral_limit(
     vehicle: VehicleParams,
     *,
@@ -614,52 +918,178 @@ def solve_lateral_limit(
     max_abs_steering_rad: float = GGVConfig.max_abs_steering_rad,
     binary_iterations: int = GGVConfig.ax_binary_iterations,
 ) -> tuple[float, float]:
-    """Return the pure-lateral endpoint ``(ay, ax)`` at zero wheel Fx.
+    """Return the sustainable steady-corner endpoint ``(ay, 0)``.
 
-    With aerodynamic drag, zero longitudinal tire force corresponds to a small
-    negative body acceleration rather than exactly ``ax = 0``.  Solving this
-    endpoint closes the acceleration and braking branches at the actual lateral
-    boundary instead of stopping at the last feasible lateral grid sample.
+    A track-speed solver needs the largest lateral acceleration that can be
+    sustained at constant speed.  The driven wheels therefore supply the small
+    longitudinal force required to balance aerodynamic drag.  Closing the GGV
+    at the zero-wheel-force coast point can be wrong for a driven car: the
+    associated pitch load transfer may make valid ``ax = 0`` cornering states
+    exist beyond the coast-only lateral limit.
     """
 
-    _front_aero, _rear_aero, drag = aero_loads(vehicle, speed)
-    coast_ax = -drag / vehicle.mass
+    return _solve_lateral_limit_at_ax(
+        vehicle,
+        speed=speed,
+        ay_upper=ay_upper,
+        target_ax=0.0,
+        mode="drive",
+        reduced_model=reduced_model,
+        max_abs_beta_rad=max_abs_beta_rad,
+        max_abs_steering_rad=max_abs_steering_rad,
+        binary_iterations=binary_iterations,
+    )
+
+
+def _solve_lateral_limit_at_ax(
+    vehicle: VehicleParams,
+    *,
+    speed: float,
+    ay_upper: float,
+    target_ax: float,
+    mode: Literal["drive", "brake"],
+    reduced_model: ReducedVehicleModel | None,
+    max_abs_beta_rad: float,
+    max_abs_steering_rad: float,
+    binary_iterations: int,
+) -> tuple[float, float]:
+    """Refine the largest lateral acceleration feasible at ``target_ax``."""
+
+    continuation_seed: tuple[float, float] | None = None
+    feasible_seed_by_ay: dict[float, tuple[float, float]] = {}
+
+    def evaluate(
+        ay: float,
+        initial_seeds: tuple[tuple[float, float], ...],
+    ) -> tuple[bool, tuple[float, float] | None, tuple[float, float] | None]:
+        if reduced_model is None:
+            result = is_feasible(
+                vehicle, speed=speed, ax=target_ax, ay=ay, mode=mode
+            )
+            return result, None, None
+
+        trims = [
+            solve_acceleration_trim(
+                reduced_model,
+                speed_mps=speed,
+                longitudinal_acceleration_mps2=target_ax,
+                lateral_acceleration_mps2=ay,
+                max_nfev=160,
+                tolerance=1e-7,
+            )
+        ]
+        distinct_seeds: list[tuple[float, float]] = []
+        for seed in initial_seeds:
+            if np.allclose(seed, (0.0, 0.0), rtol=0.0, atol=1e-14):
+                continue
+            if any(
+                np.allclose(seed, other, rtol=0.0, atol=1e-14)
+                for other in distinct_seeds
+            ):
+                continue
+            distinct_seeds.append(seed)
+            trims.append(
+                solve_acceleration_trim(
+                    reduced_model,
+                    speed_mps=speed,
+                    longitudinal_acceleration_mps2=target_ax,
+                    lateral_acceleration_mps2=ay,
+                    initial_beta_rad=seed[0],
+                    initial_steering_rad=seed[1],
+                    max_nfev=160,
+                    tolerance=1e-7,
+                )
+            )
+
+        feasible_flags = [
+            bool(
+                _trim_is_racing_feasible(
+                    trim,
+                    model=reduced_model,
+                    ay=ay,
+                    max_abs_beta_rad=max_abs_beta_rad,
+                    max_abs_steering_rad=max_abs_steering_rad,
+                )
+                and _trim_actuator_is_feasible(
+                    trim,
+                    model=reduced_model,
+                    vehicle=vehicle,
+                    speed=speed,
+                    mode=mode,
+                )
+            )
+            for trim in trims
+        ]
+        converged_seeds = [_converged_lateral_trim_seed(trim) for trim in trims]
+        continued_seed = next(
+            (seed for seed in reversed(converged_seeds[1:]) if seed is not None),
+            None,
+        )
+        next_seed = continued_seed if continued_seed is not None else converged_seeds[0]
+        accepted_seed = next(
+            (
+                seed
+                for seed, accepted in zip(
+                    reversed(converged_seeds),
+                    reversed(feasible_flags),
+                )
+                if accepted and seed is not None
+            ),
+            None,
+        )
+        return any(feasible_flags), next_seed, accepted_seed
 
     def feasible(ay: float) -> bool:
+        nonlocal continuation_seed
+        initial_seeds = () if continuation_seed is None else (continuation_seed,)
+        accepted, next_seed, accepted_seed = evaluate(ay, initial_seeds)
+        continuation_seed = next_seed
+        if accepted and accepted_seed is not None:
+            feasible_seed_by_ay[float(ay)] = accepted_seed
+        return accepted
+
+    def local_feasible_factory(anchor: float) -> Callable[[float], bool]:
         if reduced_model is None:
-            return is_feasible(
+            return lambda ay: is_feasible(
                 vehicle,
                 speed=speed,
-                ax=coast_ax,
+                ax=target_ax,
                 ay=ay,
-                mode="drive",
+                mode=mode,
             )
-        trim = solve_acceleration_trim(
-            reduced_model,
-            speed_mps=speed,
-            longitudinal_acceleration_mps2=coast_ax,
-            lateral_acceleration_mps2=ay,
-            max_nfev=160,
-            tolerance=1e-7,
-        )
-        return _trim_is_racing_feasible(
-            trim,
-            model=reduced_model,
-            ay=ay,
-            max_abs_beta_rad=max_abs_beta_rad,
-            max_abs_steering_rad=max_abs_steering_rad,
-        )
 
-    lo, hi = 0.0, float(ay_upper)
-    if feasible(hi):
-        return hi, coast_ax
-    for _ in range(binary_iterations + 2):
-        midpoint = 0.5 * (lo + hi)
-        if feasible(midpoint):
-            lo = midpoint
-        else:
-            hi = midpoint
-    return lo, coast_ax
+        anchor_key = float(anchor)
+        if anchor_key not in feasible_seed_by_ay:
+            raise RuntimeError("Missing converged seed for feasible lateral anchor.")
+        anchor_seed = feasible_seed_by_ay[anchor_key]
+        local_seed = anchor_seed
+        local_cache: dict[float, bool] = {anchor_key: True}
+
+        def anchored_feasible(ay: float) -> bool:
+            nonlocal local_seed
+            key = float(ay)
+            if key in local_cache:
+                return local_cache[key]
+            accepted, next_seed, _accepted_seed = evaluate(
+                key,
+                (local_seed, anchor_seed),
+            )
+            if next_seed is not None:
+                local_seed = next_seed
+            local_cache[key] = accepted
+            return accepted
+
+        return anchored_feasible
+
+    lateral_limit = _largest_feasible_value(
+        feasible,
+        lower=0.0,
+        upper=float(ay_upper),
+        scan_step=LATERAL_LIMIT_SCAN_STEP_G * G,
+        binary_iterations=binary_iterations,
+        local_feasible_factory=local_feasible_factory,
+    )
+    return lateral_limit, target_ax
 
 
 def warn_if_tire_loads_outside_tir_range(
@@ -697,10 +1127,7 @@ def warn_if_tire_loads_outside_tir_range(
     print("\nTire load range over finite GGV points:")
     print(f"  min Fz seen = {fz_min_seen:.1f} N")
     print(f"  max Fz seen = {fz_max_seen:.1f} N")
-    print(
-        f"  .tir valid range = "
-        f"{vehicle.fz_min_valid:.1f} to {vehicle.fz_max_valid:.1f} N"
-    )
+    print(f"  .tir valid range = {vehicle.fz_min_valid:.1f} to {vehicle.fz_max_valid:.1f} N")
 
     if fz_min_seen < vehicle.fz_min_valid or fz_max_seen > vehicle.fz_max_valid:
         print(
@@ -735,9 +1162,7 @@ def generate_ggv(
 
     if config.verbose:
         total_ay_cases = total_speeds * config.ay_points
-        total_feasibility_checks = total_ay_cases * (
-            len(ax_drive_grid) + len(ax_brake_grid)
-        )
+        total_feasibility_checks = total_ay_cases * (len(ax_drive_grid) + len(ax_brake_grid))
 
         print("=" * 72)
         print("Generating first-principles GGV envelope")
@@ -752,15 +1177,27 @@ def generate_ggv(
     for speed_idx, speed in enumerate(config.speeds, start=1):
         if config.verbose:
             print(
-                f"\n[{speed_idx}/{total_speeds}] Speed = {speed:.2f} m/s "
-                f"({speed / MPH_TO_MPS:.1f} mph)",
+                f"\n[{speed_idx}/{total_speeds}] Speed = {speed:.2f} m/s ({speed / MPH_TO_MPS:.1f} mph)",
                 flush=True,
             )
 
-        ax_accel_pos = np.empty_like(ay_positive)
-        ax_brake_pos = np.empty_like(ay_positive)
+        drive_lateral_limit, drive_lateral_ax = solve_lateral_limit(
+            vehicle,
+            speed=speed,
+            ay_upper=float(ay_positive[-1]),
+            reduced_model=reduced_model,
+            max_abs_beta_rad=config.max_abs_beta_rad,
+            max_abs_steering_rad=config.max_abs_steering_rad,
+            binary_iterations=config.ax_binary_iterations,
+        )
+        ax_accel_pos = np.full_like(ay_positive, np.nan)
+        ax_brake_pos = np.full_like(ay_positive, np.nan)
+        active_indices = np.arange(ay_positive.size)
+        if config.track_relevant_lateral_domain_only:
+            active_indices = np.flatnonzero(ay_positive < drive_lateral_limit - 1e-9)
 
-        for i, ay in enumerate(ay_positive):
+        for i in active_indices:
+            ay = ay_positive[i]
             ax_accel_pos[i] = solve_ax_limit(
                 vehicle,
                 speed=speed,
@@ -785,25 +1222,13 @@ def generate_ggv(
                 ax_binary_iterations=config.ax_binary_iterations,
             )
 
-            should_print = (
-                i == 0
-                or i == config.ay_points - 1
-                or (i + 1) % config.progress_every == 0
-            )
+            should_print = i == 0 or i == config.ay_points - 1 or (i + 1) % config.progress_every == 0
 
             if config.verbose and should_print:
                 percent = 100.0 * (i + 1) / config.ay_points
 
-                accel_text = (
-                    f"{ax_accel_pos[i] / G: .3f} g"
-                    if np.isfinite(ax_accel_pos[i])
-                    else "infeasible"
-                )
-                brake_text = (
-                    f"{ax_brake_pos[i] / G: .3f} g"
-                    if np.isfinite(ax_brake_pos[i])
-                    else "infeasible"
-                )
+                accel_text = f"{ax_accel_pos[i] / G: .3f} g" if np.isfinite(ax_accel_pos[i]) else "infeasible"
+                brake_text = f"{ax_brake_pos[i] / G: .3f} g" if np.isfinite(ax_brake_pos[i]) else "infeasible"
 
                 print(
                     f"  ay {i + 1:>4}/{config.ay_points} "
@@ -814,35 +1239,73 @@ def generate_ggv(
                     flush=True,
                 )
 
-        lateral_limit, coast_ax = solve_lateral_limit(
-            vehicle,
-            speed=speed,
-            ay_upper=float(ay_positive[-1]),
-            reduced_model=reduced_model,
-            max_abs_beta_rad=config.max_abs_beta_rad,
-            max_abs_steering_rad=config.max_abs_steering_rad,
-            binary_iterations=config.ax_binary_iterations,
+        # The drive-supported constant-speed lateral boundary can lie beyond
+        # the braking branch. Keep the two domains independent, then add the
+        # exact sustainable-corner endpoint to the drive branch. The full-map
+        # default retains every sampled brake-only row; track-study callers can
+        # omit unreachable brake-only rows above the sustainable drive edge.
+        ax_accel_pos = np.where(
+            ay_positive < drive_lateral_limit - 1e-9,
+            ax_accel_pos,
+            np.nan,
         )
-        # Retain solved interior slices, discard the intentionally infeasible
-        # search rows, and close both branches at the shared lateral endpoint.
-        interior = (
-            (ay_positive < lateral_limit - 1e-9)
-            & np.isfinite(ax_accel_pos)
-            & np.isfinite(ax_brake_pos)
-        )
-        ay_branch = np.concatenate((ay_positive[interior], [lateral_limit]))
-        ax_accel_branch = np.concatenate((ax_accel_pos[interior], [coast_ax]))
-        ax_brake_branch = np.concatenate((ax_brake_pos[interior], [coast_ax]))
+        interior = np.isfinite(ax_accel_pos) | np.isfinite(ax_brake_pos)
+        ay_branch = list(ay_positive[interior])
+        ax_accel_branch = list(ax_accel_pos[interior])
+        ax_brake_branch = list(ax_brake_pos[interior])
+
+        endpoint_rows: list[tuple[float, float, float]] = []
+        if np.isfinite(drive_lateral_limit):
+            drive_edge_brake_ax = solve_ax_limit(
+                vehicle,
+                speed=speed,
+                ay=drive_lateral_limit,
+                ax_grid=ax_brake_grid,
+                mode="brake",
+                reduced_model=reduced_model,
+                max_abs_beta_rad=config.max_abs_beta_rad,
+                max_abs_steering_rad=config.max_abs_steering_rad,
+                ax_binary_iterations=config.ax_binary_iterations,
+            )
+            endpoint_rows.append((drive_lateral_limit, drive_lateral_ax, drive_edge_brake_ax))
+        for endpoint_ay, endpoint_accel, endpoint_brake in endpoint_rows:
+            duplicate = next(
+                (
+                    index
+                    for index, existing_ay in enumerate(ay_branch)
+                    if math.isclose(
+                        float(existing_ay),
+                        float(endpoint_ay),
+                        rel_tol=0.0,
+                        abs_tol=1e-9,
+                    )
+                ),
+                None,
+            )
+            if duplicate is None:
+                ay_branch.append(float(endpoint_ay))
+                ax_accel_branch.append(float(endpoint_accel))
+                ax_brake_branch.append(float(endpoint_brake))
+            else:
+                if np.isfinite(endpoint_accel):
+                    ax_accel_branch[duplicate] = float(endpoint_accel)
+                if np.isfinite(endpoint_brake):
+                    ax_brake_branch[duplicate] = float(endpoint_brake)
+
+        order = np.argsort(np.asarray(ay_branch, dtype=float))
+        ay_branch_array = np.asarray(ay_branch, dtype=float)[order]
+        ax_accel_branch_array = np.asarray(ax_accel_branch, dtype=float)[order]
+        ax_brake_branch_array = np.asarray(ax_brake_branch, dtype=float)[order]
 
         # Mirror the positive-lateral branch to create left/right symmetry.
         if config.include_left_right:
-            ay_full = np.concatenate((-ay_branch[:0:-1], ay_branch))
-            ax_accel_full = np.concatenate((ax_accel_branch[:0:-1], ax_accel_branch))
-            ax_brake_full = np.concatenate((ax_brake_branch[:0:-1], ax_brake_branch))
+            ay_full = np.concatenate((-ay_branch_array[:0:-1], ay_branch_array))
+            ax_accel_full = np.concatenate((ax_accel_branch_array[:0:-1], ax_accel_branch_array))
+            ax_brake_full = np.concatenate((ax_brake_branch_array[:0:-1], ax_brake_branch_array))
         else:
-            ay_full = ay_branch
-            ax_accel_full = ax_accel_branch
-            ax_brake_full = ax_brake_branch
+            ay_full = ay_branch_array
+            ax_accel_full = ax_accel_branch_array
+            ax_brake_full = ax_brake_branch_array
 
         envelopes.append(
             GGVEnvelope(
@@ -856,21 +1319,9 @@ def generate_ggv(
         if config.verbose:
             feasible_mask = np.isfinite(ax_accel_full) | np.isfinite(ax_brake_full)
 
-            max_ay_g = (
-                np.nanmax(np.abs(ay_full[feasible_mask])) / G
-                if np.any(feasible_mask)
-                else np.nan
-            )
-            max_accel_g = (
-                np.nanmax(ax_accel_full) / G
-                if np.any(np.isfinite(ax_accel_full))
-                else np.nan
-            )
-            max_brake_g = (
-                np.nanmin(ax_brake_full) / G
-                if np.any(np.isfinite(ax_brake_full))
-                else np.nan
-            )
+            max_ay_g = np.nanmax(np.abs(ay_full[feasible_mask])) / G if np.any(feasible_mask) else np.nan
+            max_accel_g = np.nanmax(ax_accel_full) / G if np.any(np.isfinite(ax_accel_full)) else np.nan
+            max_brake_g = np.nanmin(ax_brake_full) / G if np.any(np.isfinite(ax_brake_full)) else np.nan
 
             print(
                 f"  Done speed {speed:.2f} m/s | "
@@ -1220,10 +1671,7 @@ def save_ggv_csv(envelopes: list[GGVEnvelope], output_path: str | Path) -> None:
 
     data = np.asarray(rows, dtype=float)
 
-    header = (
-        "speed_mps,ay_mps2,ax_accel_mps2,ax_brake_mps2,"
-        "accel_feasible,brake_feasible"
-    )
+    header = "speed_mps,ay_mps2,ax_accel_mps2,ax_brake_mps2,accel_feasible,brake_feasible"
 
     np.savetxt(output, data, delimiter=",", header=header, comments="")
     print(f"Saved CSV: {output}")
@@ -1249,32 +1697,16 @@ def config_to_ggv_config(config: dict[str, Any]) -> GGVConfig:
         model_dof=cast(DOFModel, model_dof),
         ay_max_g=float(generation.get("ay_max_g", GGVConfig.ay_max_g)),
         ay_points=int(generation.get("ay_points", GGVConfig.ay_points)),
-        ax_search_min_g=float(
-            generation.get("ax_search_min_g", GGVConfig.ax_search_min_g)
-        ),
-        ax_search_max_g=float(
-            generation.get("ax_search_max_g", GGVConfig.ax_search_max_g)
-        ),
-        ax_search_points=int(
-            generation.get("ax_search_points", GGVConfig.ax_search_points)
-        ),
-        max_abs_beta_rad=float(
-            generation.get("max_abs_beta_rad", GGVConfig.max_abs_beta_rad)
-        ),
-        max_abs_steering_rad=float(
-            generation.get("max_abs_steering_rad", GGVConfig.max_abs_steering_rad)
-        ),
-        ax_binary_iterations=int(
-            generation.get("ax_binary_iterations", GGVConfig.ax_binary_iterations)
-        ),
-        include_left_right=bool(
-            generation.get("include_left_right", GGVConfig.include_left_right)
-        ),
+        ax_search_min_g=float(generation.get("ax_search_min_g", GGVConfig.ax_search_min_g)),
+        ax_search_max_g=float(generation.get("ax_search_max_g", GGVConfig.ax_search_max_g)),
+        ax_search_points=int(generation.get("ax_search_points", GGVConfig.ax_search_points)),
+        max_abs_beta_rad=float(generation.get("max_abs_beta_rad", GGVConfig.max_abs_beta_rad)),
+        max_abs_steering_rad=float(generation.get("max_abs_steering_rad", GGVConfig.max_abs_steering_rad)),
+        ax_binary_iterations=int(generation.get("ax_binary_iterations", GGVConfig.ax_binary_iterations)),
+        include_left_right=bool(generation.get("include_left_right", GGVConfig.include_left_right)),
         verbose=bool(generation.get("verbose", True)),
         progress_every=int(generation.get("progress_every", GGVConfig.progress_every)),
-        warn_tire_load_range=bool(
-            generation.get("warn_tire_load_range", GGVConfig.warn_tire_load_range)
-        ),
+        warn_tire_load_range=bool(generation.get("warn_tire_load_range", GGVConfig.warn_tire_load_range)),
     )
 
 
@@ -1298,15 +1730,9 @@ def track_profile_from_config(config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(raw_profile, dict):
         raise ValueError("performance_index.track_profile must be a mapping.")
 
-    maneuvers = [
-        _normalize_track_maneuver(raw)
-        for raw in raw_profile.get("maneuvers", [])
-    ]
+    maneuvers = [_normalize_track_maneuver(raw) for raw in raw_profile.get("maneuvers", [])]
     if not maneuvers:
-        maneuvers = [
-            _normalize_track_maneuver(raw)
-            for raw in default_track_profile().get("maneuvers", [])
-        ]
+        maneuvers = [_normalize_track_maneuver(raw) for raw in default_track_profile().get("maneuvers", [])]
 
     weights = raw_profile.get("combined_weights") or {}
     if not isinstance(weights, dict):
@@ -1412,30 +1838,16 @@ def ggv_capability_by_speed(envelopes: list[GGVEnvelope]) -> list[dict[str, floa
         rows.append(
             {
                 "speed_mps": float(env.speed),
-                "max_cornering_g": (
-                    float(np.nanmax(np.abs(ay_g[finite_any])))
-                    if np.any(finite_any)
-                    else float("nan")
-                ),
-                "max_accel_g": (
-                    float(np.nanmax(ax_accel_g[finite_accel]))
-                    if np.any(finite_accel)
-                    else float("nan")
-                ),
+                "max_cornering_g": (float(np.nanmax(np.abs(ay_g[finite_any]))) if np.any(finite_any) else float("nan")),
+                "max_accel_g": (float(np.nanmax(ax_accel_g[finite_accel])) if np.any(finite_accel) else float("nan")),
                 "max_braking_g": (
-                    float(abs(np.nanmin(ax_brake_g[finite_brake])))
-                    if np.any(finite_brake)
-                    else float("nan")
+                    float(abs(np.nanmin(ax_brake_g[finite_brake]))) if np.any(finite_brake) else float("nan")
                 ),
                 "straightline_accel_g": (
-                    float(ax_accel_g[zero_ay_idx])
-                    if np.isfinite(ax_accel_g[zero_ay_idx])
-                    else float("nan")
+                    float(ax_accel_g[zero_ay_idx]) if np.isfinite(ax_accel_g[zero_ay_idx]) else float("nan")
                 ),
                 "straightline_braking_g": (
-                    float(abs(ax_brake_g[zero_ay_idx]))
-                    if np.isfinite(ax_brake_g[zero_ay_idx])
-                    else float("nan")
+                    float(abs(ax_brake_g[zero_ay_idx])) if np.isfinite(ax_brake_g[zero_ay_idx]) else float("nan")
                 ),
                 "ggv_area_g2": area_mps4 / G**2,
             }
@@ -1573,9 +1985,7 @@ def _path_performance_metrics(
                 "weight": float(maneuver.get("weight", distance)),
                 "distance_m": distance,
                 "radius_m": radius,
-                "angle_deg": float(
-                    maneuver.get("angle_deg", np.rad2deg(distance / radius))
-                ),
+                "angle_deg": float(maneuver.get("angle_deg", np.rad2deg(distance / radius))),
                 "speed_start_mps": speed,
                 "speed_end_mps": speed,
                 "speed_mean_mps": speed,
@@ -2315,11 +2725,7 @@ def _add_ggv_track_page(
 ) -> None:
     fig, axs = plt.subplots(1, 2, figsize=(13, 5.8))
     corner_rows = [row for row in track_rows if row["group"] == "lateral"]
-    long_rows = [
-        row
-        for row in track_rows
-        if row["group"] in {"accel", "brake", "longitudinal"}
-    ]
+    long_rows = [row for row in track_rows if row["group"] in {"accel", "brake", "longitudinal"}]
 
     if corner_rows:
         labels = [str(row["maneuver"]) for row in corner_rows]
@@ -2333,11 +2739,7 @@ def _add_ggv_track_page(
         labels = [str(row["maneuver"]) for row in long_rows]
         values = [float(row.get("speed_mean_mps", row["score"])) for row in long_rows]
         colors = [
-            "#2F6B9A"
-            if row["group"] == "longitudinal"
-            else "#607D3B"
-            if row["group"] == "accel"
-            else "#C84C31"
+            "#2F6B9A" if row["group"] == "longitudinal" else "#607D3B" if row["group"] == "accel" else "#C84C31"
             for row in long_rows
         ]
         axs[1].barh(labels, values, color=colors)
@@ -2495,15 +2897,11 @@ def _integrate_straight_profile_points(
 
     for i in range(n_steps):
         accel = _interp_speed_capacity(speeds, accel_capacity, forward[i])
-        forward[i + 1] = np.sqrt(
-            max(forward[i] ** 2 + 2.0 * max(accel, 0.0) * ds, 0.0)
-        )
+        forward[i + 1] = np.sqrt(max(forward[i] ** 2 + 2.0 * max(accel, 0.0) * ds, 0.0))
 
     for i in range(n_steps - 1, -1, -1):
         brake = _interp_speed_capacity(speeds, brake_capacity, backward[i + 1])
-        backward[i] = np.sqrt(
-            max(backward[i + 1] ** 2 + 2.0 * max(brake, 0.0) * ds, 0.0)
-        )
+        backward[i] = np.sqrt(max(backward[i + 1] ** 2 + 2.0 * max(brake, 0.0) * ds, 0.0))
 
     velocity = np.minimum(forward, backward)
     velocity[0] = min(velocity[0], max(start_speed_mps, 0.0))
@@ -2739,18 +3137,9 @@ def main() -> None:
 
     print("\nTire peak model:")
     print(f"  FNOMIN = {vehicle.fz_ref:.1f} N")
-    print(
-        f"  mu_x(FNOMIN) ≈ "
-        f"{tire_mu_x(vehicle, np.array([vehicle.fz_ref], dtype=np.float64))[0]:.3f}"
-    )
-    print(
-        f"  mu_y(FNOMIN) ≈ "
-        f"{tire_mu_y(vehicle, np.array([vehicle.fz_ref], dtype=np.float64))[0]:.3f}"
-    )
-    print(
-        f"  valid Fz range = "
-        f"{vehicle.fz_min_valid:.1f} to {vehicle.fz_max_valid:.1f} N"
-    )
+    print(f"  mu_x(FNOMIN) ≈ {tire_mu_x(vehicle, np.array([vehicle.fz_ref], dtype=np.float64))[0]:.3f}")
+    print(f"  mu_y(FNOMIN) ≈ {tire_mu_y(vehicle, np.array([vehicle.fz_ref], dtype=np.float64))[0]:.3f}")
+    print(f"  valid Fz range = {vehicle.fz_min_valid:.1f} to {vehicle.fz_max_valid:.1f} N")
 
     config = config_to_ggv_config(ggv_report_config)
 

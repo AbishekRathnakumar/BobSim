@@ -136,9 +136,15 @@ equations and constrains selected generalized accelerations:
 - prescribed GGV point: body `ax/ay` are prescribed at zero yaw rate while yaw,
   vertical, rotational, wheel-speed, and unsprung accelerations are
   equilibrated. Curvature and steering-radius feasibility belong to the track
-  solver, not the acceleration-capability envelope. The acceleration and brake
-  branches share a separately solved pure-lateral coast endpoint, so the map is
-  closed at the true lateral limit rather than the final feasible grid slice;
+  solver, not the acceleration-capability envelope. The acceleration branch is
+  closed at a separately solved sustainable-corner endpoint at zero body
+  longitudinal acceleration, with driven-wheel force balancing aero drag. The
+  brake branch retains its independently solved feasible sampled domain. This
+  preserves valid drive-supported lateral states without inventing brake
+  capability there, and refines the track-speed boundary beyond the sampled
+  grid. Track-only studies may enable
+  `track_relevant_lateral_domain_only` to omit brake-only rows above that
+  sustainable boundary because their speed profiles cannot query them;
 - YMD point: sideslip and steer are imposed, longitudinal/vertical/wheel states
   are equilibrated, and lateral acceleration plus yaw moment are outputs.
 
