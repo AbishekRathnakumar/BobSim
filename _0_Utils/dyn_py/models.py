@@ -26,7 +26,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from _0_Utils.dyn_py.parameters import G, ReducedVehicleParameters
-from _0_Utils.kin_py.lookup import VehicleKinematicState
+from _0_Utils.dyn_py.kinematics import VehicleKinematicState
 
 
 FloatArray = NDArray[np.float64]
@@ -58,9 +58,18 @@ class ModelOutput:
     suspension_forces_n: FloatArray
     geometric_vertical_forces_n: FloatArray
     algebraic_load_transfer_n: FloatArray
+    jounce_m: FloatArray
+    jounce_speed_mps: FloatArray
     contact_patch_positions_body_m: FloatArray
+    contact_patch_tangents: FloatArray
+    wheel_center_offsets_m: FloatArray
     camber_rad: FloatArray
     toe_rad: FloatArray
+    caster_rad: FloatArray
+    kpi_rad: FloatArray
+    mechanical_trail_m: FloatArray
+    scrub_radius_m: FloatArray
+    instant_link_coefficients: FloatArray
 
 
 @dataclass(frozen=True)
@@ -285,9 +294,18 @@ class VehicleDynamicsSystem(ABC):
             suspension_forces_n=suspension_forces,
             geometric_vertical_forces_n=geometric_vertical,
             algebraic_load_transfer_n=algebraic_load_transfer,
+            jounce_m=kinematics.jounce_m,
+            jounce_speed_mps=vertical.jounce_speed_mps,
             contact_patch_positions_body_m=corner_positions,
+            contact_patch_tangents=kinematics.contact_patch_tangents,
+            wheel_center_offsets_m=kinematics.wheel_center_offsets_m,
             camber_rad=kinematics.camber_rad,
             toe_rad=kinematics.toe_rad,
+            caster_rad=kinematics.caster_rad,
+            kpi_rad=kinematics.kpi_rad,
+            mechanical_trail_m=kinematics.mechanical_trail_m,
+            scrub_radius_m=kinematics.scrub_radius_m,
+            instant_link_coefficients=kinematics.instant_links.coefficient_matrix,
         )
         self._last_output = output
         return output

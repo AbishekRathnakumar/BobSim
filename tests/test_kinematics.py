@@ -40,6 +40,8 @@ def test_precomputed_vehicle_kinematics_matches_in_loop_nonlinear_solution() -> 
     interpolated = lookup.at(jounce)
     exact = nonlinear.at(jounce)
 
+    np.testing.assert_array_equal(interpolated.jounce_m, jounce)
+    np.testing.assert_array_equal(exact.jounce_m, jounce)
     np.testing.assert_allclose(
         interpolated.contact_patch_offsets_m,
         exact.contact_patch_offsets_m,

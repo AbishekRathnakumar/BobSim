@@ -19,7 +19,7 @@ from _0_Utils.vehicle_io import (
     tire_templates_root,
     vehicle_yaml_path,
 )
-from _0_Utils.kin_py.lookup import (
+from _0_Utils.dyn_py.kinematics import (
     KinematicsMode,
     VehicleKinematics,
     create_kinematics,
@@ -353,7 +353,7 @@ def load_reduced_vehicle_parameters(
         continuous_drive_force_n=powertrain.continuous_drive_force_n,
         maximum_drive_speed_mps=powertrain.maximum_vehicle_speed_mps,
         drive_distribution_front=0.0,
-        brake_distribution_front=0.84,
+        brake_distribution_front=_brake_distribution_front(data),
     )
 
 
@@ -416,6 +416,16 @@ def project_powertrain_limits(
         continuous_drive_force_n=continuous_torque * ratio / radius,
         maximum_vehicle_speed_mps=maximum_motor_speed_radps * radius / ratio,
     )
+
+
+def _brake_distribution_front(data: Mapping[str, Any]) -> float:
+    brake = data.get("brake")
+    value = 0.84
+    if isinstance(brake, Mapping):
+        value = float(brake.get("front_bias", value))
+    if not 0.0 <= value <= 1.0:
+        raise ValueError("brake.front_bias must be between 0 and 1.")
+    return value
 
 
 MassComponent = tuple[str, float, tuple[float, float, float], FloatArray]

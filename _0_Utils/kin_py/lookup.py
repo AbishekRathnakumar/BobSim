@@ -114,6 +114,7 @@ class AxleKinematicState:
 class VehicleKinematicState:
     """Interpolated or exactly solved kinematics ordered FL, FR, RL, RR."""
 
+    jounce_m: FloatArray
     contact_patch_offsets_m: FloatArray
     wheel_center_offsets_m: FloatArray
     contact_patch_tangents: FloatArray
@@ -206,6 +207,7 @@ class DoubleWishboneKinematicLookup:
     def at(self, jounce_m: ArrayLike) -> VehicleKinematicState:
         jounce = _validate_jounce(jounce_m)
         return _assemble_vehicle_state(
+            jounce,
             self.front.at(float(jounce[0])),
             self.front.at(float(jounce[1])),
             self.rear.at(float(jounce[2])),
@@ -243,6 +245,7 @@ class NonlinearDoubleWishboneKinematics:
     def at(self, jounce_m: ArrayLike) -> VehicleKinematicState:
         jounce = _validate_jounce(jounce_m)
         return _assemble_vehicle_state(
+            jounce,
             self._solve(self.front, float(jounce[0])),
             self._solve(self.front, float(jounce[1])),
             self._solve(self.rear, float(jounce[2])),
@@ -349,6 +352,7 @@ def _state_from_solution(
 
 
 def _assemble_vehicle_state(
+    jounce_m: FloatArray,
     front_left: AxleKinematicState,
     front_right_left_geometry: AxleKinematicState,
     rear_left: AxleKinematicState,
@@ -384,6 +388,7 @@ def _assemble_vehicle_state(
         )  # type: ignore[arg-type]
     )
     return VehicleKinematicState(
+        jounce_m=jounce_m.copy(),
         contact_patch_offsets_m=contact_offsets,
         wheel_center_offsets_m=wheel_offsets,
         contact_patch_tangents=tangents,

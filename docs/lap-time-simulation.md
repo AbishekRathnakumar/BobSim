@@ -37,6 +37,19 @@ performance map, so its provenance must match `model_dof` when comparing
 fidelities. GGV paths may contain `{model_dof}`; the default uses separate CSVs
 so a map produced by one fidelity cannot be silently reused by another.
 
+Generated maps have a sidecar provenance record containing vehicle, physics,
+fidelity, power-limit, resolution, trim-bound, tire-domain, and multistart
+fingerprints. A cache mismatch regenerates the GGV. A map explicitly supplied
+with `generate_if_missing: false` remains usable but is labeled
+`supplied_unverified` in `summary.json`.
+
+The default full endurance config applies a 32 kW constant event cap to both
+the QSS envelope and forward transient controller. The 80 kW VCU/hardware limit
+stays in `vehicle.yml` for acceleration, autocross, skidpad, and uncapped
+vehicle characterization. The 32 kW case is an energy-budget proxy only; it
+does not model state of charge, lap-to-lap energy allocation, or thermal
+derating.
+
 `make lap-validation-visuals` runs a compact, resumable 3/6/10/14DOF acceptance
 matrix and writes disposable figures and CSVs under
 `temp/lap_time_validation/<dof>dof/`. Each folder contains:
@@ -129,6 +142,12 @@ active according to the selected fidelity.
 errors, target/actual speed, and yaw rate. `summary.json` reports QSS time,
 transient time, their delta, completion, and maximum lateral error.
 
+The summary also records the active model space and validity limits. This is a
+single-configuration simulation, so its `swept_parameters` list is empty. DOE
+workflows must separately identify the one parameter changed in each variant;
+the EnvelopeSens interval-splice table now does that explicitly and writes an
+active/swept-space study manifest.
+
 ## Interpreting validation
 
 First require the transient run to complete the lap without leaving the legal
@@ -153,3 +172,9 @@ drawn as valid results.
 
 This establishes internal functionality, not external truth. BobLib and test-
 vehicle correlation remain a separate validation phase.
+
+Simulation-only outputs support design trends and raw event-time sensitivities,
+not Formula SAE competition points. BobSim does not contain a QSS-to-points
+conversion. Such a claim requires controlled correlation, uncertainty, matching
+competition telemetry, and demonstrated response-space coverage; absent that
+evidence, `summary.json` declares `competition_points_supported: false`.

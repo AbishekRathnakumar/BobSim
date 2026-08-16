@@ -14,13 +14,10 @@ from _0_Utils.dyn_py import (
     DOFModel,
     ModelInputs,
     TransientResult,
+    Vehicle,
     compare_transient_signals,
-    create_model,
-    load_reduced_vehicle_parameters,
-    simulate_transient,
-    solve_steady_state,
 )
-from _0_Utils.kin_py import KinematicsMode
+from _0_Utils.dyn_py import KinematicsMode
 
 
 COMPARISON_SIGNALS = ("velX", "velY", "yawVel", "sideslip", "accX", "accY", "roll")
@@ -41,13 +38,12 @@ def run_step_steer(
 ) -> TransientResult:
     """Run the same step-steer shape used by BobLib TransientEval."""
 
-    parameters = load_reduced_vehicle_parameters(
+    vehicle = Vehicle.from_yaml(
         vehicle_path,
         kinematics_mode=kinematics_mode,
         kinematics_sample_count=kinematics_sample_count,
     )
-    model = create_model(dof, parameters)
-    initial_trim = solve_steady_state(model, speed_mps=speed_mps)
+    initial_trim = vehicle.steady_state(dof, speed_mps=speed_mps)
     if not initial_trim.success:
         raise RuntimeError(
             f"Could not initialize {dof}DOF straight-line trim: {initial_trim.message}"
@@ -64,8 +60,8 @@ def run_step_steer(
 
     time = np.arange(0.0, stop_time_s + 0.5 * sample_period_s, sample_period_s)
     method = "Radau" if dof == 14 else "RK45"
-    return simulate_transient(
-        model,
+    return vehicle.simulate(
+        dof,
         initial_state=initial_trim.state,
         controls=controls,
         time_s=time,

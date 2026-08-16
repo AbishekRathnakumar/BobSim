@@ -190,6 +190,7 @@ def test_lap_time_runner_writes_qss_artifacts(tmp_path) -> None:
                 "schema": "bobsim.lap-time.v1",
                 "vehicle": "vehicle.yml",
                 "model_dof": 3,
+                "event": {"name": "endurance", "drive_power_limit_w": 32_000.0},
                 "track": {
                     "boundary_csv": "_3_StandardSim/LapTimeEval/tracks/endurance_reference.csv",
                     "vehicle_width_m": 1.35,
@@ -208,6 +209,9 @@ def test_lap_time_runner_writes_qss_artifacts(tmp_path) -> None:
     summary = run_lap_time_evaluation(config_path, scenario="qss")
 
     assert summary["model_dof"] == 3
+    assert summary["effective_drive_power_limit_w"] == pytest.approx(32_000.0)
+    assert summary["ggv_provenance"]["status"] == "supplied_unverified"
+    assert not summary["study_scope"]["competition_points_supported"]
     assert summary["qss_converged"]
     assert summary["optimized_qss_lap_time_s"] > 0.0
     assert (output_path / "qss_lap.csv").is_file()

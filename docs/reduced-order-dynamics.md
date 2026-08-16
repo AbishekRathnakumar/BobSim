@@ -5,10 +5,29 @@ quasi-steady envelopes. It is intentionally lower fidelity than BobLib: the
 point is to make assumptions inspectable, run quickly, and quantify where each
 added degree of freedom improves agreement with the Modelica reference.
 
-The equations are in `_0_Utils/dyn_py/`; nonlinear suspension geometry and its
-runtime lookup maps are owned by `_0_Utils/kin_py/`. EnvelopeSim and StandardSim
-both import those foundation packages; neither foundation package imports from
-a higher layer.
+The public product is `_0_Utils/dyn_py/`: it composes the equations, nonlinear
+suspension geometry, runtime lookup maps, QSS trims, and transient integration.
+The original `_0_Utils/kin_py/` implementation remains independently testable
+and backward compatible, while new consumers access it through `dyn_py`.
+EnvelopeSim and StandardSim import that foundation package; it does not import
+from a higher layer.
+
+## Unified vehicle interface
+
+Use one `Vehicle` when a workflow needs both kinematics and dynamics:
+
+```python
+from _0_Utils.dyn_py import Vehicle
+
+vehicle = Vehicle.from_yaml()
+wheel_state = vehicle.kinematics_at([0.01, -0.01, 0.0, 0.0])
+model_14dof = vehicle.model(14)
+trim = vehicle.steady_state(14, speed_mps=12.0)
+```
+
+The vehicle definition and hardpoint-derived lookup are built once and shared
+by every lazily constructed DOF model. Lower-level `create_kinematics`,
+`create_model`, QSS, and transient functions remain public for focused tools.
 
 ## Fidelity ladder
 
@@ -42,7 +61,7 @@ omega_dot = I^-1 (sum(M_body) - omega x (I omega))
 ```
 
 Contact-patch position, attitude, and articulation velocity come from the
-active `kin_py` evaluator. Velocity is
+active `dyn_py` kinematics evaluator. Velocity is
 `v_cg + omega x r_contact + (dr_contact/dz) * z_dot`; tire slip is evaluated in
 the resulting individual wheel frames. Bump toe changes wheel heading, contact
 patch migration changes the force moment arm, and camber modifies the
@@ -68,6 +87,17 @@ The projected continuous torque and
 power limits are retained separately for a future thermal/endurance derating
 model; they do not replace the instantaneous peak GGV boundary.
 
+An event study may lower that capability through `Vehicle.with_power_limit()`.
+The returned vehicle owns a replaced parameter set, so its GGV, QSS lap, and
+forward transient lap all see the same cap without modifying the physical
+80 kW VCU limit in `vehicle.yml`. The default endurance lap currently uses a
+documented 32 kW constant cap as a starting assumption. It is not an energy
+state or thermal derating model, and the output summary labels that limitation.
+
+Brake bias is likewise a physical vehicle input at `brake.front_bias` in
+`vehicle.yml`; it is no longer hidden as a solver constant. A CG-only study
+must hold this value and both anti-roll rates fixed.
+
 The 10/14DOF QSS constraints retain wheel inertia. A prescribed vehicle
 acceleration therefore gives each wheel the corresponding rolling angular
 acceleration rather than incorrectly imposing zero wheel acceleration. In the
@@ -90,7 +120,7 @@ the YAML shock tables are the fallback.
 ## Double-wishbone kinematic coupling
 
 The dynamic system receives suspension hardpoints, not hand-entered curves,
-instant centers, or jacking coefficients. `_0_Utils/kin_py/lookup.py` uses the
+instant centers, or jacking coefficients. The `dyn_py` kinematics surface uses the
 shared nonlinear `CornerKinematics` constraint solver to derive contact-patch
 and wheel-center migration; camber, toe, caster, KPI, trail, and scrub; and the
 contact-patch tangent across wheel travel. At the current corner jounce,
@@ -101,6 +131,14 @@ links remain:
 Fz_geometric / Fx = -dx_contact / dz_contact
 Fz_geometric / Fy = -dy_contact / dz_contact
 ```
+
+That returned state retains the requested `FL, FR, RL, RR` jounce vector. Each
+`dyn_py` force evaluation exposes the individual jounces and rates together
+with contact-patch position/tangent, wheel-center migration, camber, toe,
+caster, KPI, mechanical trail, scrub radius, and longitudinal/lateral
+instant-link coefficients. Transient results publish the same corner channels
+with `FL`, `FR`, `RL`, and `RR` suffixes, so suspension motion can be inspected
+without reconstructing it from chassis roll, pitch, and heave.
 
 This is equivalent to the side-view and front-view swing-arm line of action,
 but remains valid when the 3D wishbone pivot axes are swept and a simple 2D
@@ -172,6 +210,15 @@ equations and constrains selected generalized accelerations:
 
 The unknown set grows naturally with fidelity: body sideslip/steer/drive torque,
 then heave-roll-pitch, then four wheel slips, then four unsprung positions.
+
+Finite tire-fit bounds are validity constraints. GGV and YMD cells are rejected
+when any normal load falls outside the active `.tir` file's `FZMIN`/`FZMAX`
+range; warning-only extrapolation is available only through an explicit config
+override. Study-grade GGV and lap configs enable a deterministic beta/steer
+multistart search after the warm start fails, which protects the reported
+boundary from a disconnected local trim branch. The routine all-DOF visual
+smoke config disables that expensive audit explicitly. Sideslip and roadwheel-
+steer bounds remain study assumptions and are written into lap summaries.
 
 Select the backend in `GGV/ggv_config.yml` or `YMD/ymd_config.yml`:
 
@@ -257,7 +304,10 @@ transient lap for 3/6/10/14DOF. Inspect the generated figures under
 - The tire is a compact MF-derived saturation model, not the full MF52/MF6.2
   equation set, and has no relaxation-length states.
 - The powertrain is represented by wheel torque in the transient equations;
-  the existing GGV power cap remains an outer feasibility constraint.
+  the GGV and lap-controller power cap remains an outer feasibility constraint.
+- The 32 kW endurance setting is a constant event cap, not an accumulator-energy
+  or motor/inverter thermal state. A defensible endurance study must add those
+  histories or treat the cap as a sensitivity case.
 - Aero uses the nominal ride-height map projection rather than reevaluating the
   full map during body motion.
 - The 14DOF road interface currently supports vertical road height/speed only.

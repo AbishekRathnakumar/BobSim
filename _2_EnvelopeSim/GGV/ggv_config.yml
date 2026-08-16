@@ -14,6 +14,8 @@ generation:
   max_abs_beta_rad: 0.25
   max_abs_steering_rad: 0.5
   ax_binary_iterations: 14
+  enforce_tire_load_range: true
+  trim_multistart: true
   include_left_right: true
   warn_tire_load_range: true
 

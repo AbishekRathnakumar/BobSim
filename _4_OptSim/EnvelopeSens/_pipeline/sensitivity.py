@@ -223,10 +223,27 @@ def write_envelope_variant_table(
     variants: list[EnvelopeVariant],
     output_path: Path,
 ) -> pd.DataFrame:
-    rows = [
-        {"variant": variant.name, **variant.params}
-        for variant in variants
-    ]
+    baseline = variants[0].params if variants else {}
+    rows = []
+    for variant in variants:
+        changed = [
+            path
+            for path, value in variant.params.items()
+            if not np.isclose(value, baseline[path], rtol=0.0, atol=1e-12)
+        ]
+        if len(changed) > 1:
+            raise ValueError(
+                "interval_splice must vary at most one parameter per variant; "
+                f"{variant.name} changes {changed}."
+            )
+        rows.append(
+            {
+                "variant": variant.name,
+                "active_swept_parameter": changed[0] if changed else "baseline",
+                "changed_parameter_count": len(changed),
+                **variant.params,
+            }
+        )
     df = pd.DataFrame(rows)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_path, index=False)

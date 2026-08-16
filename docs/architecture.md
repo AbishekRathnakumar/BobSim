@@ -30,10 +30,12 @@ vehicle.yml ──► _5_App / _0_Utils ──► BobLib Modelica records ──
 - `vehicle_templates/`, `tire_templates/`: checked-in architecture and tire
   starting points (`.yml`, `.tir`).
 - `deploy/`: PyInstaller packaging for the desktop build.
-- `dyn_py/`: inspectable 3/6/10/14DOF equations shared by QSS envelopes and
-  transient reduced-order studies.
-- `kin_py/`: nonlinear double-wishbone constraints plus precomputed and exact
-  runtime kinematics backends consumed by `dyn_py`.
+- `dyn_py/`: the unified reduced vehicle product: nonlinear double-wishbone
+  kinematics, inspectable 3/6/10/14DOF equations, QSS trims, and transient
+  integration. `dyn_py.Vehicle` composes one vehicle definition across them.
+- `kin_py/`: the original kinematics implementation and compatibility surface.
+  New product consumers import kinematics through `dyn_py`; the standalone
+  package remains supported for detailed suspension-element workflows.
 - `lap_sim/`: track geometry, GGV speed propagation, racing-line optimization,
   and the transient path follower.
 - `external/BobLib/`: **the submodule**. See [boblib-submodule.md](boblib-submodule.md).

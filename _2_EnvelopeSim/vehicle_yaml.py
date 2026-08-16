@@ -114,13 +114,14 @@ def project_vehicle_yaml(
         "mu_min": 0.8,
     }
 
+    brake_distribution_front = _brake_distribution_front(vehicle_data)
     ggv = GGVVehicleParams(
         **shared,
         max_drive_power=powertrain.peak_power_w,
         max_drive_force=powertrain.peak_drive_force_n,
         max_drive_speed=powertrain.maximum_vehicle_speed_mps,
         drive_distribution_front=0.0,
-        brake_distribution_front=DEFAULT_BRAKE_DISTRIBUTION_FRONT,
+        brake_distribution_front=brake_distribution_front,
         pdx1=tire["PDX1"],
         pdx2=tire["PDX2"],
     )
@@ -148,7 +149,7 @@ def project_vehicle_yaml(
         "fz_min_valid_n": tire["FZMIN"],
         "fz_max_valid_n": tire["FZMAX"],
         "drive_distribution_front": 0.0,
-        "brake_distribution_front": DEFAULT_BRAKE_DISTRIBUTION_FRONT,
+        "brake_distribution_front": brake_distribution_front,
         "peak_drive_power_w": powertrain.peak_power_w,
         "continuous_drive_power_w": powertrain.continuous_power_w,
         "hardware_peak_drive_power_w": powertrain.hardware_peak_power_w,
@@ -161,6 +162,16 @@ def project_vehicle_yaml(
         "maximum_drive_speed_mps": powertrain.maximum_vehicle_speed_mps,
     }
     return EnvelopeVehicleProjection(ggv=ggv, ymd=ymd, summary=summary)
+
+
+def _brake_distribution_front(vehicle_data: dict[str, Any]) -> float:
+    brake = vehicle_data.get("brake")
+    value = DEFAULT_BRAKE_DISTRIBUTION_FRONT
+    if isinstance(brake, dict):
+        value = float(brake.get("front_bias", value))
+    if not 0.0 <= value <= 1.0:
+        raise ValueError("brake.front_bias must be between 0 and 1.")
+    return value
 
 
 def _combined_mass_properties(vehicle_data: dict[str, Any]) -> tuple[float, tuple[float, float, float]]:

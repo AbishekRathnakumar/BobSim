@@ -3,6 +3,12 @@ schema: bobsim.lap-time.v1
 vehicle: vehicle.yml
 model_dof: 3  # Shared by GGV/QSS generation and the transient lap: 3, 6, 10, or 14
 
+event:
+  name: endurance
+  # Constant event-level starting assumption. This is not yet an energy-state
+  # or thermal-derate model; other FSAE dynamic events use the 80 kW YAML cap.
+  drive_power_limit_w: 32000
+
 track:
   boundary_csv: _3_StandardSim/LapTimeEval/tracks/endurance_michigan_2019.csv
   vehicle_width_m: 1.35
@@ -17,7 +23,7 @@ racing_line:
 qss:
   # Reuses EnvelopeSim output when present. If absent, a compact map is
   # generated from the selected dyn_py model and written here.
-  ggv_csv: _2_EnvelopeSim/Build/GGV/ggv_dyn_py_{model_dof}dof.csv
+  ggv_csv: _2_EnvelopeSim/Build/GGV/ggv_dyn_py_{model_dof}dof_endurance_32kw.csv
   generate_if_missing: true
   max_speed_mps: null  # Optional lap speed cap; useful for transient validation
   speeds_mps: [5.0, 10.0, 15.0, 20.0, 25.0]
@@ -28,6 +34,8 @@ qss:
   max_abs_beta_rad: 0.25
   max_abs_steering_rad: 0.5
   ax_binary_iterations: 14
+  enforce_tire_load_range: true
+  trim_multistart: true
 
 transient:
   sample_period_s: 0.02

@@ -74,7 +74,16 @@ def simulate_transient(
     steering = np.empty(len(solution.t), dtype=float)
     camber = np.empty((len(solution.t), 4), dtype=float)
     toe = np.empty((len(solution.t), 4), dtype=float)
+    caster = np.empty((len(solution.t), 4), dtype=float)
+    kpi = np.empty((len(solution.t), 4), dtype=float)
+    mechanical_trail = np.empty((len(solution.t), 4), dtype=float)
+    scrub_radius = np.empty((len(solution.t), 4), dtype=float)
+    jounce = np.empty((len(solution.t), 4), dtype=float)
+    jounce_speed = np.empty((len(solution.t), 4), dtype=float)
     contact_patch = np.empty((len(solution.t), 4, 3), dtype=float)
+    contact_patch_tangent = np.empty((len(solution.t), 4, 3), dtype=float)
+    wheel_center_offset = np.empty((len(solution.t), 4, 3), dtype=float)
+    instant_link = np.empty((len(solution.t), 4, 2), dtype=float)
     for index, (time, state) in enumerate(zip(solution.t, states)):
         model_inputs = input_at(float(time), state)
         output = model.evaluate(state, model_inputs)
@@ -91,7 +100,16 @@ def simulate_transient(
         steering[index] = model_inputs.steering_rad
         camber[index] = output.camber_rad
         toe[index] = output.toe_rad
+        caster[index] = output.caster_rad
+        kpi[index] = output.kpi_rad
+        mechanical_trail[index] = output.mechanical_trail_m
+        scrub_radius[index] = output.scrub_radius_m
+        jounce[index] = output.jounce_m
+        jounce_speed[index] = output.jounce_speed_mps
         contact_patch[index] = output.contact_patch_positions_body_m
+        contact_patch_tangent[index] = output.contact_patch_tangents
+        wheel_center_offset[index] = output.wheel_center_offsets_m
+        instant_link[index] = output.instant_link_coefficients
     signals.update(
         {
             "accX": body_acceleration[:, 0],
@@ -108,9 +126,23 @@ def simulate_transient(
     for corner_index, corner in enumerate(("FL", "FR", "RL", "RR")):
         signals[f"camber{corner}"] = camber[:, corner_index]
         signals[f"toe{corner}"] = toe[:, corner_index]
+        signals[f"caster{corner}"] = caster[:, corner_index]
+        signals[f"kpi{corner}"] = kpi[:, corner_index]
+        signals[f"mechanicalTrail{corner}"] = mechanical_trail[:, corner_index]
+        signals[f"scrubRadius{corner}"] = scrub_radius[:, corner_index]
+        signals[f"jounce{corner}"] = jounce[:, corner_index]
+        signals[f"jounceVel{corner}"] = jounce_speed[:, corner_index]
         signals[f"contactPatchX{corner}"] = contact_patch[:, corner_index, 0]
         signals[f"contactPatchY{corner}"] = contact_patch[:, corner_index, 1]
         signals[f"contactPatchZ{corner}"] = contact_patch[:, corner_index, 2]
+        signals[f"contactPatchTangentX{corner}"] = contact_patch_tangent[:, corner_index, 0]
+        signals[f"contactPatchTangentY{corner}"] = contact_patch_tangent[:, corner_index, 1]
+        signals[f"contactPatchTangentZ{corner}"] = contact_patch_tangent[:, corner_index, 2]
+        signals[f"wheelCenterOffsetX{corner}"] = wheel_center_offset[:, corner_index, 0]
+        signals[f"wheelCenterOffsetY{corner}"] = wheel_center_offset[:, corner_index, 1]
+        signals[f"wheelCenterOffsetZ{corner}"] = wheel_center_offset[:, corner_index, 2]
+        signals[f"instantLinkLongitudinal{corner}"] = instant_link[:, corner_index, 0]
+        signals[f"instantLinkLateral{corner}"] = instant_link[:, corner_index, 1]
     return TransientResult(
         time_s=np.asarray(solution.t, dtype=float),
         state=states,

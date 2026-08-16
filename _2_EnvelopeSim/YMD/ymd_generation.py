@@ -127,6 +127,7 @@ class YMDConfig:
 
     verbose: bool = True
     warn_tire_load_range: bool = True
+    enforce_tire_load_range: bool = True
 
 
 @dataclass
@@ -414,7 +415,16 @@ def ymd_point(
             trim.output.generalized_acceleration[1]
             + config.yaw_rate * velocity[0]
         )
-        return ay, float(trim.output.body_moment_nm[2]), trim.success
+        loads = np.asarray(trim.output.normal_loads_n, dtype=float)
+        tire_domain_valid = bool(
+            np.all(loads >= vehicle.fz_min_valid)
+            and np.all(loads <= vehicle.fz_max_valid)
+        )
+        return (
+            ay,
+            float(trim.output.body_moment_nm[2]),
+            bool(trim.success and (tire_domain_valid or not config.enforce_tire_load_range)),
+        )
 
     ay = 0.0
     ax = 0.0
@@ -435,6 +445,10 @@ def ymd_point(
         )
 
         if np.any(fz <= 0.0):
+            return np.nan, np.nan, False
+        if config.enforce_tire_load_range and (
+            np.any(fz < vehicle.fz_min_valid) or np.any(fz > vehicle.fz_max_valid)
+        ):
             return np.nan, np.nan, False
 
         alpha = tire_slip_angles(
@@ -548,7 +562,15 @@ def generate_ymd(
                     + config.yaw_rate * velocity[0]
                 )
                 mz = float(trim.output.body_moment_nm[2])
-                converged = trim.success
+                loads = np.asarray(trim.output.normal_loads_n, dtype=float)
+                tire_domain_valid = bool(
+                    np.all(loads >= vehicle.fz_min_valid)
+                    and np.all(loads <= vehicle.fz_max_valid)
+                )
+                converged = bool(
+                    trim.success
+                    and (tire_domain_valid or not config.enforce_tire_load_range)
+                )
                 if converged:
                     row_seed = trim.unknowns
                     column_seeds[j] = trim.unknowns
@@ -1072,6 +1094,12 @@ def config_to_ymd_config(config: dict[str, Any]) -> YMDConfig:
         verbose=bool(generation.get("verbose", True)),
         warn_tire_load_range=bool(
             generation.get("warn_tire_load_range", YMDConfig.warn_tire_load_range)
+        ),
+        enforce_tire_load_range=bool(
+            generation.get(
+                "enforce_tire_load_range",
+                YMDConfig.enforce_tire_load_range,
+            )
         ),
     )
 
@@ -2800,7 +2828,7 @@ def main() -> None:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-    from _0_Utils.dyn_py import create_model, load_reduced_vehicle_parameters
+    from _0_Utils.dyn_py import Vehicle
     from _2_EnvelopeSim.vehicle_yaml import load_vehicle_yaml, project_vehicle_yaml
 
     config_path = DEFAULT_YMD_CONFIG
@@ -2850,10 +2878,7 @@ def main() -> None:
     # -------------------------------------------------------------------------
     config = config_to_ymd_config(ymd_report_config)
 
-    reduced_model = create_model(
-        config.model_dof,
-        load_reduced_vehicle_parameters(vehicle_path),
-    )
+    reduced_model = Vehicle.from_yaml(vehicle_path).model(config.model_dof)
     print(f"  reduced backend = {config.model_dof}DOF QSS")
 
     result = generate_ymd(vehicle, config, reduced_model=reduced_model)

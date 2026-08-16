@@ -11,8 +11,12 @@ from typing import Any
 
 import numpy as np
 
-from _0_Utils.dyn_py import ModelInputs, create_model, load_reduced_vehicle_parameters
-from _0_Utils.kin_py import create_kinematics
+from _0_Utils.dyn_py import (
+    ModelInputs,
+    create_kinematics,
+    create_model,
+    load_reduced_vehicle_parameters,
+)
 from _0_Utils.vehicle_io import load_yaml, repo_root, vehicle_yaml_path
 
 

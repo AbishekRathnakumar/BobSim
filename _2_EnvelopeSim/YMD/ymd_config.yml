@@ -17,6 +17,7 @@ generation:
   tol_ay: 1.0e-5
   relaxation: 0.35
   warn_tire_load_range: true
+  enforce_tire_load_range: true
 
 speed_sweep:
   enabled: true

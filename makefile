@@ -93,6 +93,10 @@ CLEAN_DOCKER_IMAGE ?= bobdyn/bobsim:latest
 	opt-standard opt-envelope opt-refined opt-search opt-doe-smoke \
 	clean clean-app clean-visual clean-standard clean-envelope clean-opt clean-owned clean-all
 
+ifeq ($(OS),Windows_NT)
+help:
+	@$(PYTHON) _0_Utils/print_make_help.py
+else
 help:
 	@printf '%s\n' \
 		'BobSim targets:' \
@@ -175,6 +179,7 @@ help:
 		'  clean-opt                Remove generated OptSim artifacts' \
 		'  clean-owned               Remove root-owned generated artifacts via no-network Docker' \
 		'  clean-all                 Remove caches and generated workflow artifacts'
+endif
 
 init:
 	git submodule update --init --recursive

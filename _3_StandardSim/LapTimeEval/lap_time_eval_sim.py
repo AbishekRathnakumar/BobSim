@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Literal, cast
 
 import numpy as np
 
-from _0_Utils.dyn_py import DOFModel, create_model, load_reduced_vehicle_parameters
+from _0_Utils.dyn_py import DOFModel, Vehicle, VehicleDynamicsSystem
 from _0_Utils.lap_sim import (
     GGVMap,
     TrackCorridor,
@@ -37,6 +39,7 @@ def run_lap_time_evaluation(
     root = repo_root()
     config = load_yaml(Path(config_path))
     track_config = _mapping(config, "track")
+    event_config = _mapping(config, "event")
     line_config = _mapping(config, "racing_line")
     qss_config = _mapping(config, "qss")
     transient_config = _mapping(config, "transient")
@@ -52,6 +55,10 @@ def run_lap_time_evaluation(
     model_dof = cast(DOFModel, model_dof_value)
     format_values = {"model_dof": model_dof_value}
     vehicle_path = _root_path(root, config.get("vehicle", "vehicle.yml"))
+    vehicle = Vehicle.from_yaml(vehicle_path)
+    configured_power_limit = event_config.get("drive_power_limit_w")
+    if configured_power_limit is not None:
+        vehicle = vehicle.with_power_limit(float(configured_power_limit))
     track_path = _root_path(root, track_config["boundary_csv"])
     ggv_path = _root_path(
         root,
@@ -66,11 +73,13 @@ def run_lap_time_evaluation(
     ):
         output_directory /= f"{model_dof_value}dof"
     output_directory.mkdir(parents=True, exist_ok=True)
-    ggv = _load_or_generate_ggv(
+    ggv, ggv_provenance = _load_or_generate_ggv(
         ggv_path,
         vehicle_path=vehicle_path,
         model_dof=model_dof,
+        model=vehicle.model(model_dof),
         qss_config=qss_config,
+        effective_power_limit_w=vehicle.parameters.peak_drive_power_w,
     )
     corridor = TrackCorridor.from_csv(track_path)
     line_mode = cast(LineMode, str(line_config.get("mode", "minimum_time_qss")))
@@ -93,7 +102,10 @@ def run_lap_time_evaluation(
     summary: dict[str, Any] = {
         "scenario": scenario,
         "model_dof": model_dof,
+        "event": str(event_config.get("name", "unspecified")),
+        "effective_drive_power_limit_w": vehicle.parameters.peak_drive_power_w,
         "ggv_csv": _display_path(ggv_path, root),
+        "ggv_provenance": ggv_provenance,
         "line_mode": line_mode,
         "track_length_m": optimized.line.track_length_m,
         "centerline_qss_lap_time_s": optimized.centerline_lap_time_s,
@@ -103,12 +115,11 @@ def run_lap_time_evaluation(
         "line_optimizer_converged": optimized.success,
         "line_optimizer_message": optimized.message,
         "line_optimizer_iterations": optimized.iterations,
+        "study_scope": _study_scope_summary(vehicle, model_dof, qss_config),
     }
     if scenario in {"transient", "both"}:
-        parameters = load_reduced_vehicle_parameters(vehicle_path)
-        model = create_model(model_dof, parameters)
         transient = simulate_transient_lap(
-            model,
+            vehicle.model(model_dof),
             optimized.qss_lap,
             sample_period_s=float(transient_config.get("sample_period_s", 0.02)),
             lookahead_m=float(transient_config.get("lookahead_m", 5.0)),
@@ -149,10 +160,27 @@ def _load_or_generate_ggv(
     *,
     vehicle_path: Path,
     model_dof: DOFModel,
+    model: VehicleDynamicsSystem,
     qss_config: dict[str, Any],
-) -> GGVMap:
+    effective_power_limit_w: float,
+) -> tuple[GGVMap, dict[str, Any]]:
+    expected_provenance = _ggv_provenance(
+        vehicle_path=vehicle_path,
+        model_dof=model_dof,
+        qss_config=qss_config,
+        effective_power_limit_w=effective_power_limit_w,
+    )
+    metadata_path = path.with_suffix(path.suffix + ".metadata.json")
     if path.exists():
-        return GGVMap.from_csv(path)
+        if not bool(qss_config.get("generate_if_missing", True)):
+            return GGVMap.from_csv(path), {
+                "status": "supplied_unverified",
+                "fingerprint": None,
+            }
+        if metadata_path.exists():
+            raw = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and raw.get("fingerprint") == expected_provenance["fingerprint"]:
+                return GGVMap.from_csv(path), {**raw, "status": "verified_cache"}
     if not bool(qss_config.get("generate_if_missing", True)):
         raise FileNotFoundError(
             f"GGV CSV does not exist: {path}. Run make envelope-ggv or enable generation."
@@ -162,9 +190,11 @@ def _load_or_generate_ggv(
     from _2_EnvelopeSim.GGV.ggv_generation import GGVConfig, generate_ggv, save_ggv_csv
     from _2_EnvelopeSim.vehicle_yaml import load_vehicle_yaml, project_vehicle_yaml
 
-    parameters = load_reduced_vehicle_parameters(vehicle_path)
-    model = create_model(model_dof, parameters)
-    vehicle = project_vehicle_yaml(load_vehicle_yaml(vehicle_path)).ggv
+    ggv_vehicle = project_vehicle_yaml(load_vehicle_yaml(vehicle_path)).ggv
+    ggv_vehicle = replace(
+        ggv_vehicle,
+        max_drive_power=min(ggv_vehicle.max_drive_power, effective_power_limit_w),
+    )
     generation = GGVConfig(
         speeds=tuple(float(value) for value in qss_config.get("speeds_mps", (5, 10, 15, 20, 25))),
         model_dof=model_dof,
@@ -176,14 +206,106 @@ def _load_or_generate_ggv(
         max_abs_beta_rad=float(qss_config.get("max_abs_beta_rad", 0.25)),
         max_abs_steering_rad=float(qss_config.get("max_abs_steering_rad", 0.5)),
         ax_binary_iterations=int(qss_config.get("ax_binary_iterations", 14)),
+        enforce_tire_load_range=bool(qss_config.get("enforce_tire_load_range", True)),
+        trim_multistart=bool(qss_config.get("trim_multistart", True)),
         verbose=True,
         progress_every=5,
         warn_tire_load_range=False,
     )
-    envelopes = generate_ggv(vehicle, generation, reduced_model=model)
+    envelopes = generate_ggv(ggv_vehicle, generation, reduced_model=model)
     path.parent.mkdir(parents=True, exist_ok=True)
     save_ggv_csv(envelopes, path)
-    return GGVMap.from_csv(path)
+    metadata_path.write_text(
+        json.dumps(expected_provenance, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return GGVMap.from_csv(path), {**expected_provenance, "status": "generated"}
+
+
+def _ggv_provenance(
+    *,
+    vehicle_path: Path,
+    model_dof: DOFModel,
+    qss_config: dict[str, Any],
+    effective_power_limit_w: float,
+) -> dict[str, Any]:
+    root = repo_root()
+    physics_digest = hashlib.sha256()
+    physics_inputs = [
+        Path(__file__),
+        root / "_2_EnvelopeSim/GGV/ggv_generation.py",
+        *sorted((root / "_0_Utils/dyn_py").glob("*.py")),
+    ]
+    for source in physics_inputs:
+        physics_digest.update(source.relative_to(root).as_posix().encode("utf-8"))
+        physics_digest.update(b"\0")
+        physics_digest.update(source.read_bytes())
+        physics_digest.update(b"\0")
+    settings = {
+        key: qss_config.get(key)
+        for key in (
+            "speeds_mps",
+            "ay_max_g",
+            "ay_points",
+            "ax_search_min_g",
+            "ax_search_max_g",
+            "max_abs_beta_rad",
+            "max_abs_steering_rad",
+            "ax_binary_iterations",
+            "enforce_tire_load_range",
+            "trim_multistart",
+        )
+    }
+    payload = {
+        "schema": "bobsim.ggv-provenance.v1",
+        "model_dof": int(model_dof),
+        "effective_drive_power_limit_w": float(effective_power_limit_w),
+        "settings": settings,
+        "vehicle_sha256": hashlib.sha256(vehicle_path.read_bytes()).hexdigest(),
+        "physics_sha256": physics_digest.hexdigest(),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {**payload, "fingerprint": hashlib.sha256(encoded).hexdigest()}
+
+
+def _study_scope_summary(
+    vehicle: Vehicle,
+    model_dof: DOFModel,
+    qss_config: dict[str, Any],
+) -> dict[str, Any]:
+    parameters = vehicle.parameters
+    return {
+        "evidence_level": "simulation_only_design_trend",
+        "competition_points_supported": False,
+        "swept_parameters": [],
+        "active_model_space": [
+            f"{model_dof}DOF reduced vehicle equations",
+            "speed-dependent QSS GGV",
+            "forward transient lap when requested",
+            "load-sensitive combined-slip tire projection",
+            "nominal ride-height aero map applied at mapped CoP",
+            "component-derived mass, CG, and full inertia tensor",
+        ],
+        "validity_limits": {
+            "tire_normal_load_min_n": parameters.tire.fz_min_n,
+            "tire_normal_load_max_n": parameters.tire.fz_max_n,
+            "tire_load_range_enforced": bool(
+                qss_config.get("enforce_tire_load_range", True)
+            ),
+            "max_abs_sideslip_rad": float(qss_config.get("max_abs_beta_rad", 0.25)),
+            "max_abs_roadwheel_steer_rad": float(
+                qss_config.get("max_abs_steering_rad", 0.5)
+            ),
+            "trim_multistart": bool(qss_config.get("trim_multistart", True)),
+        },
+        "known_unmodeled_or_uncorrelated": [
+            "aero yaw dependence and in-motion ride-height map lookup",
+            "full MF tire equations, temperature, wear, and relaxation length",
+            "energy depletion and thermal derating",
+            "driver execution, surface/weather, reliability, and penalties",
+            "competition telemetry response-space coverage",
+        ],
+    }
 
 
 def _mapping(config: dict[str, Any], key: str) -> dict[str, Any]:

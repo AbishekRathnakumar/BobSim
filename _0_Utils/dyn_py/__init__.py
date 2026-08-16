@@ -1,4 +1,7 @@
-"""``dyn_py`` reduced-order dynamics shared by transient and envelope workflows.
+"""Unified suspension kinematics and reduced-order vehicle dynamics.
+
+``Vehicle`` is the product-level entry point.  The lower-level kinematics,
+model, QSS, and transient interfaces remain public for focused workflows.
 
 The model names count generalized coordinates, not first-order states:
 
@@ -7,6 +10,25 @@ The model names count generalized coordinates, not first-order states:
 * 10DOF: 6DOF body plus four wheel rotations.
 * 14DOF: 10DOF plus four unsprung vertical motions.
 """
+
+from _0_Utils.dyn_py.kinematics import (
+    BUMP_CURVE_SOURCES,
+    DEFAULT_ROLL_DEG,
+    DEFAULT_SWEEP_M,
+    KINEMATIC_CURVE_META,
+    ROLL_CURVE_SOURCES,
+    AxleKinematicLookup,
+    AxleKinematicState,
+    CornerKinematics,
+    CornerPointSet,
+    DoubleWishboneKinematicLookup,
+    KinematicsMode,
+    NonlinearDoubleWishboneKinematics,
+    VehicleKinematicState,
+    VehicleKinematics,
+    create_kinematics,
+    kinematic_curves_payload,
+)
 
 from _0_Utils.dyn_py.models import (
     DOFModel,
@@ -45,27 +67,45 @@ from _0_Utils.dyn_py.transient import (
     compare_transient_signals,
     simulate_transient,
 )
+from _0_Utils.dyn_py.vehicle import Vehicle
 
 __all__ = [
+    "AxleKinematicLookup",
+    "AxleKinematicState",
+    "BUMP_CURVE_SOURCES",
     "CORNERS",
     "CornerInstantLink",
+    "CornerKinematics",
+    "CornerPointSet",
+    "DEFAULT_ROLL_DEG",
+    "DEFAULT_SWEEP_M",
     "DOFModel",
     "DoubleWishboneGeometry",
     "DoubleWishboneInstantLinks",
+    "DoubleWishboneKinematicLookup",
+    "KINEMATIC_CURVE_META",
+    "KinematicsMode",
     "ModelInputs",
     "ModelOutput",
+    "NonlinearDoubleWishboneKinematics",
     "PowertrainLimits",
     "QSSResult",
+    "ROLL_CURVE_SOURCES",
     "ReducedVehicleParameters",
     "TireParameters",
     "TransientResult",
+    "Vehicle",
     "VehicleDynamicsSystem",
+    "VehicleKinematicState",
+    "VehicleKinematics",
     "VehicleModel3DOF",
     "VehicleModel6DOF",
     "VehicleModel10DOF",
     "VehicleModel14DOF",
     "compare_transient_signals",
+    "create_kinematics",
     "create_model",
+    "kinematic_curves_payload",
     "load_reduced_vehicle_parameters",
     "project_double_wishbone_instant_links",
     "project_powertrain_limits",

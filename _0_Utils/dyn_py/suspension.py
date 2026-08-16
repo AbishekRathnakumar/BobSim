@@ -1,6 +1,6 @@
 """Compatibility exports for suspension force transmission.
 
-Kinematic curve construction is owned by :mod:`_0_Utils.kin_py.lookup`.
+Kinematic curve construction is exposed by :mod:`_0_Utils.dyn_py.kinematics`.
 ``dyn_py`` retains these names so existing reduced-order integrations do not
 need to know whether the active evaluator is interpolated or nonlinear.
 """
@@ -11,7 +11,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from _0_Utils.kin_py.lookup import (
+from _0_Utils.dyn_py.kinematics import (
     CornerInstantLink,
     DoubleWishboneInstantLinks,
     DoubleWishboneKinematicLookup,

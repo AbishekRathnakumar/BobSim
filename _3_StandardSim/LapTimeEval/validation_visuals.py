@@ -16,7 +16,7 @@ os.environ.setdefault("MPLCONFIGDIR", "temp/matplotlib")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from _0_Utils.dyn_py import DOFModel, create_model, load_reduced_vehicle_parameters
+from _0_Utils.dyn_py import DOFModel, Vehicle
 from _0_Utils.lap_sim import (
     GGVMap,
     TrackCorridor,
@@ -73,7 +73,7 @@ def generate_validation_visuals(
         _root_path(root, config_path),
         vehicle_path,
     )
-    parameters = load_reduced_vehicle_parameters(vehicle_path)
+    vehicle = Vehicle.from_yaml(vehicle_path)
     projected = project_vehicle_yaml(load_vehicle_yaml(vehicle_path))
     track_config = _mapping(config, "track")
     corridor = TrackCorridor.from_csv(_root_path(root, track_config["boundary_csv"]))
@@ -103,7 +103,7 @@ def generate_validation_visuals(
                 assert cached_summary is not None
                 summaries.append(cached_summary)
                 continue
-        model = create_model(dof, parameters)
+        model = vehicle.model(dof)
 
         ggv_envelopes = _ggv_results(
             dof_output,
@@ -253,6 +253,8 @@ def _ggv_results(
         max_abs_beta_rad=float(config.get("max_abs_beta_rad", 0.25)),
         max_abs_steering_rad=float(config.get("max_abs_steering_rad", 0.5)),
         ax_binary_iterations=int(config.get("ax_binary_iterations", 8)),
+        enforce_tire_load_range=bool(config.get("enforce_tire_load_range", True)),
+        trim_multistart=bool(config.get("trim_multistart", True)),
         verbose=True,
         progress_every=3,
         warn_tire_load_range=False,
@@ -294,6 +296,10 @@ def _close_cached_ggv_endpoints(
             max_abs_beta_rad=float(config.get("max_abs_beta_rad", 0.25)),
             max_abs_steering_rad=float(config.get("max_abs_steering_rad", 0.5)),
             binary_iterations=int(config.get("ax_binary_iterations", 8)),
+            enforce_tire_load_range=bool(
+                config.get("enforce_tire_load_range", True)
+            ),
+            trim_multistart=bool(config.get("trim_multistart", True)),
         )
         positive = (
             (envelope.ay >= 0.0)
@@ -336,6 +342,7 @@ def _ymd_results(
         hwa_min_deg=float(config.get("roadwheel_min_deg", -12.0)),
         hwa_max_deg=float(config.get("roadwheel_max_deg", 12.0)),
         hwa_points=int(config.get("roadwheel_points", 9)),
+        enforce_tire_load_range=bool(config.get("enforce_tire_load_range", True)),
         verbose=True,
         warn_tire_load_range=False,
     )
@@ -405,6 +412,22 @@ def _write_lap_figures(output: Path, corridor: TrackCorridor, qss: Any, transien
     ):
         if name in state:
             series[name] = state[name][:count]
+    for corner in ("FL", "FR", "RL", "RR"):
+        for prefix in (
+            "jounce",
+            "jounceVel",
+            "camber",
+            "toe",
+            "caster",
+            "kpi",
+            "mechanicalTrail",
+            "scrubRadius",
+            "instantLinkLongitudinal",
+            "instantLinkLateral",
+        ):
+            name = f"{prefix}{corner}"
+            if name in state:
+                series[name] = state[name][:count]
 
     qss_plots = {
         "qss_racing_line": _spatial_page("QSS racing line"),
@@ -470,6 +493,44 @@ def _write_lap_figures(output: Path, corridor: TrackCorridor, qss: Any, transien
                 _signal("Roll", "time", "Time (s)", "roll", "Roll (rad)"),
                 _signal("Pitch", "time", "Time (s)", "pitch", "Pitch (rad)"),
                 _signal("Yaw rate", "time", "Time (s)", "yaw_rate", "Yaw rate (rad/s)"),
+            ),
+        }
+        transient_plots["transient_suspension_jounce"] = {
+            "layout": "quad",
+            "title": f"{dof}DOF suspension jounce",
+            "subplots": tuple(
+                _signal(corner, "time", "Time (s)", f"jounce{corner}", "Jounce (m)")
+                for corner in ("FL", "FR", "RL", "RR")
+            ),
+        }
+        transient_plots["transient_suspension_jounce_rate"] = {
+            "layout": "quad",
+            "title": f"{dof}DOF suspension jounce rate",
+            "subplots": tuple(
+                _signal(
+                    corner,
+                    "time",
+                    "Time (s)",
+                    f"jounceVel{corner}",
+                    "Jounce rate (m/s)",
+                )
+                for corner in ("FL", "FR", "RL", "RR")
+            ),
+        }
+        transient_plots["transient_wheel_kinematics"] = {
+            "layout": "quad",
+            "title": f"{dof}DOF wheel attitude from suspension kinematics",
+            "subplots": tuple(
+                _signal(
+                    corner,
+                    "time",
+                    "Time (s)",
+                    f"camber{corner}",
+                    "Angle (rad)",
+                    overlay=(f"toe{corner}", "Toe"),
+                    label="Camber",
+                )
+                for corner in ("FL", "FR", "RL", "RR")
             ),
         }
     if dof >= 10:
@@ -743,6 +804,7 @@ def _signal(
     y_label: str,
     *,
     overlay: tuple[str, str] | None = None,
+    label: str = "Transient",
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "title": title,
@@ -750,7 +812,7 @@ def _signal(
         "y": {"key": y_key, "label": y_label},
     }
     if overlay is not None:
-        result["label"] = "Transient"
+        result["label"] = label
         result["overlay"] = {
             "x": {"key": x_key, "label": x_label},
             "y": {"key": overlay[0], "label": y_label},

@@ -666,7 +666,9 @@ def test_modelica_build_action_fails_when_artifacts_are_missing(
     returncode = app._run_action_process(app.ACTION_SPECS["build-vehicle"], job["id"])
 
     assert returncode == 1
-    assert "Stopping before simulation run" in app.JOBS.get(job["id"])["log"]
+    job_state = app.JOBS.get(job["id"])
+    assert job_state is not None
+    assert "Stopping before simulation run" in job_state["log"]
 
 
 def test_modelica_build_action_creates_build_directory_before_omc(
@@ -698,7 +700,9 @@ def test_modelica_build_action_creates_build_directory_before_omc(
     returncode = app._run_action_process(app.ACTION_SPECS["build-vehicle"], job["id"])
 
     assert returncode == 0
-    assert f"Ensured {target.label} build directory" in app.JOBS.get(job["id"])["log"]
+    job_state = app.JOBS.get(job["id"])
+    assert job_state is not None
+    assert f"Ensured {target.label} build directory" in job_state["log"]
 
 
 def test_subprocess_action_uses_utf8_replacement_stdio(
@@ -738,7 +742,9 @@ def test_subprocess_action_uses_utf8_replacement_stdio(
     assert env["PYTHONIOENCODING"] == "utf-8:replace"
     assert captured["encoding"] == "utf-8"
     assert captured["errors"] == "replace"
-    assert "\U0001f4ca ok" in app.JOBS.get(job["id"])["log"]
+    job_state = app.JOBS.get(job["id"])
+    assert job_state is not None
+    assert "\U0001f4ca ok" in job_state["log"]
 
 
 def test_standard_run_action_fails_cleanly_when_vehicle_sim_is_missing(
@@ -758,7 +764,9 @@ def test_standard_run_action_fails_cleanly_when_vehicle_sim_is_missing(
     returncode = app._run_action_process(app.ACTION_SPECS["run-ramp-steer"], job["id"])
 
     assert returncode == 2
-    log = app.JOBS.get(job["id"])["log"]
+    job_state = app.JOBS.get(job["id"])
+    assert job_state is not None
+    log = job_state["log"]
     assert "VehicleSim is not built yet" in log
     assert "_3_StandardSim/BuildBobLib/VehicleSim" in log
 

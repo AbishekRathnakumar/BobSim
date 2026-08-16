@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from copy import deepcopy
 
 import numpy as np
 import pytest
+import yaml
 
 from _0_Utils.dyn_py import (
     ModelInputs,
+    Vehicle,
     compare_transient_signals,
     create_model,
     load_reduced_vehicle_parameters,
@@ -29,6 +32,7 @@ from _2_EnvelopeSim.GGV.ggv_generation import (
 )
 from _2_EnvelopeSim.YMD.ymd_generation import YMDConfig, ymd_point
 from _2_EnvelopeSim.vehicle_yaml import load_vehicle_yaml, project_vehicle_yaml
+from _0_Utils.vehicle_io import load_yaml, vehicle_yaml_path
 
 
 @pytest.fixture(scope="module")
@@ -60,9 +64,18 @@ def test_nested_model_state_contract(parameters, dof, state_size, added_coordina
     assert output.wheel_forces_body_n.shape == (4, 3)
     assert output.geometric_vertical_forces_n.shape == (4,)
     assert output.algebraic_load_transfer_n.shape == (4,)
+    assert output.jounce_m.shape == (4,)
+    assert output.jounce_speed_mps.shape == (4,)
     assert output.contact_patch_positions_body_m.shape == (4, 3)
+    assert output.contact_patch_tangents.shape == (4, 3)
+    assert output.wheel_center_offsets_m.shape == (4, 3)
     assert output.camber_rad.shape == (4,)
     assert output.toe_rad.shape == (4,)
+    assert output.caster_rad.shape == (4,)
+    assert output.kpi_rad.shape == (4,)
+    assert output.mechanical_trail_m.shape == (4,)
+    assert output.scrub_radius_m.shape == (4,)
+    assert output.instant_link_coefficients.shape == (4, 2)
     assert np.all(np.isfinite(output.derivative))
 
 
@@ -74,6 +87,43 @@ def test_model_classes_make_the_fidelity_ladder_explicit():
     models = (VehicleModel3DOF, VehicleModel6DOF, VehicleModel10DOF, VehicleModel14DOF)
     assert [model.dof for model in models] == [3, 6, 10, 14]
     assert all(model.added_physics for model in models)
+
+
+def test_vehicle_composes_kinematics_and_nested_dynamics(parameters):
+    vehicle = Vehicle(parameters)
+    jounce = np.array([0.012, -0.009, 0.004, -0.003])
+
+    kinematics = vehicle.kinematics_at(jounce)
+    np.testing.assert_array_equal(kinematics.jounce_m, jounce)
+    assert vehicle.kinematics is parameters.kinematics
+
+    model = vehicle.model(6)
+    assert vehicle.model(6) is model
+    assert model.parameters is parameters
+
+    state = vehicle.initial_state(6, speed_mps=12.0)
+    state[3] = np.deg2rad(0.5)
+    output = vehicle.evaluate(6, state)
+    np.testing.assert_allclose(
+        output.instant_link_coefficients,
+        vehicle.kinematics_at(output.jounce_m).instant_links.coefficient_matrix,
+    )
+
+
+def test_vehicle_product_api_runs_qss_and_transient(parameters):
+    vehicle = Vehicle(parameters)
+    trim = vehicle.steady_state(6, speed_mps=10.0)
+    assert trim.success
+
+    transient = vehicle.simulate(
+        6,
+        initial_state=trim.state,
+        controls=trim.inputs,
+        time_s=np.linspace(0.0, 0.02, 3),
+        method="Radau",
+    )
+    assert transient.success
+    assert "jounceFL" in transient.signals
 
 
 def test_dyn_py_aero_projection_matches_envelope_projection(parameters):
@@ -112,6 +162,41 @@ def test_vehicle_powertrain_is_projected_to_contact_patch(parameters):
     )
     assert projection.ggv.max_drive_speed == pytest.approx(
         parameters.maximum_drive_speed_mps
+    )
+
+
+def test_event_power_cap_propagates_without_increasing_vehicle_limit(parameters):
+    capped = Vehicle(parameters).with_power_limit(32_000.0)
+
+    assert capped.parameters.peak_drive_power_w == pytest.approx(32_000.0)
+    assert capped.parameters.continuous_drive_power_w == pytest.approx(32_000.0)
+    assert capped.model(6).parameters.peak_drive_power_w == pytest.approx(32_000.0)
+    assert parameters.peak_drive_power_w == pytest.approx(80_000.0)
+
+    still_hardware_limited = Vehicle(parameters).with_power_limit(100_000.0)
+    assert still_hardware_limited.parameters.peak_drive_power_w == pytest.approx(
+        80_000.0
+    )
+
+
+def test_component_cg_move_recomputes_total_cg_and_yaw_inertia(
+    parameters,
+    tmp_path,
+):
+    data = deepcopy(load_yaml(vehicle_yaml_path()))
+    data["driver_mass"]["cg_m"][0] += 0.10
+    moved_path = tmp_path / "moved_driver.yml"
+    moved_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    moved = load_reduced_vehicle_parameters(moved_path)
+
+    assert moved.mass_kg == pytest.approx(parameters.mass_kg)
+    assert moved.static_wheel_loads_n != parameters.static_wheel_loads_n
+    assert moved.inertia_kg_m2[2][2] != pytest.approx(
+        parameters.inertia_kg_m2[2][2]
+    )
+    assert moved.inertia_kg_m2[0][2] != pytest.approx(
+        parameters.inertia_kg_m2[0][2]
     )
 
 
@@ -289,6 +374,15 @@ def test_body_roll_uses_precomputed_kinematic_attitude_and_contact_migration(par
     assert np.max(np.abs(output.toe_rad)) > np.deg2rad(0.001)
     assert not np.allclose(output.contact_patch_positions_body_m, nominal)
     assert output.camber_rad[0] != pytest.approx(-output.camber_rad[1])
+    assert output.jounce_m[0] * output.jounce_m[1] < 0.0
+    assert abs(output.jounce_m[0]) == pytest.approx(
+        abs(output.jounce_m[1]),
+        rel=1e-2,
+    )
+    np.testing.assert_allclose(
+        output.instant_link_coefficients,
+        parameters.double_wishbone.instant_links_at(output.jounce_m).coefficient_matrix,
+    )
 
 
 def test_camber_curves_modify_reduced_tire_capacity(parameters):
@@ -378,7 +472,9 @@ def test_ggv_pure_lateral_endpoint_is_closed_at_coast(parameters):
         binary_iterations=4,
     )
 
-    assert 1.8 * 9.80665 < ay < 2.6 * 9.80665
+    # The valid endpoint is now set by the first tire reaching FZMIN, before
+    # the old warning-only extrapolation reached its larger apparent limit.
+    assert 1.6 * 9.80665 < ay < 1.9 * 9.80665
     assert ax < 0.0
     assert abs(ax) < 1.0
 
@@ -400,6 +496,29 @@ def test_ggv_force_closure_uses_kinematic_bump_toe(parameters):
         ay=1.7 * G,
         max_abs_beta_rad=0.25,
         max_abs_steering_rad=0.5,
+    )
+
+    invalid_output = replace(
+        result.output,
+        normal_loads_n=np.array(
+            [parameters.tire.fz_min_n - 1.0, 500.0, 500.0, 500.0]
+        ),
+    )
+    invalid_trim = replace(result, output=invalid_output)
+    assert not _trim_is_racing_feasible(
+        invalid_trim,
+        model=model,
+        ay=1.7 * G,
+        max_abs_beta_rad=0.25,
+        max_abs_steering_rad=0.5,
+    )
+    assert _trim_is_racing_feasible(
+        invalid_trim,
+        model=model,
+        ay=1.7 * G,
+        max_abs_beta_rad=0.25,
+        max_abs_steering_rad=0.5,
+        enforce_tire_load_range=False,
     )
 
 
@@ -448,7 +567,27 @@ def test_transient_result_exposes_boblib_comparison_channels(parameters, dof):
     )
 
     assert result.success
-    for signal in ("velX", "velY", "yawVel", "sideslip", "accX", "accY", "roll"):
+    for signal in (
+        "velX",
+        "velY",
+        "yawVel",
+        "sideslip",
+        "accX",
+        "accY",
+        "roll",
+        "jounceFL",
+        "jounceVelRR",
+        "camberFL",
+        "toeFR",
+        "casterRL",
+        "kpiRR",
+        "mechanicalTrailFL",
+        "scrubRadiusFR",
+        "contactPatchTangentXRL",
+        "wheelCenterOffsetZRR",
+        "instantLinkLongitudinalFL",
+        "instantLinkLateralRR",
+    ):
         assert signal in result.signals
     metrics = compare_transient_signals(
         result.time_s,

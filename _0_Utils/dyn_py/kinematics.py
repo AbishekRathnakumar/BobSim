@@ -1,24 +1,23 @@
-"""Suspension-kinematics implementation and compatibility exports.
+"""Suspension-kinematics public surface for :mod:`_0_Utils.dyn_py`.
 
-New vehicle-model consumers should import the unified public surface from
-``_0_Utils.dyn_py``.  This package remains stable for the original standalone
-kinematics workflows and their detailed element tests.
+The nonlinear hardpoint solver remains an independently testable subsystem,
+but users of the reduced vehicle product should not need to assemble it beside
+the dynamics package themselves.  This module is the stable composition
+boundary; ``_0_Utils.kin_py`` remains available for compatibility with the
+original kinematics-only workflows.
 """
 
-from _0_Utils.kin_py.kinematics import (
+from _0_Utils.kin_py import (
     BUMP_CURVE_SOURCES,
     DEFAULT_ROLL_DEG,
     DEFAULT_SWEEP_M,
     KINEMATIC_CURVE_META,
     ROLL_CURVE_SOURCES,
-    CornerKinematics,
-    CornerPointSet,
-    kinematic_curves_payload,
-)
-from _0_Utils.kin_py.lookup import (
     AxleKinematicLookup,
     AxleKinematicState,
     CornerInstantLink,
+    CornerKinematics,
+    CornerPointSet,
     DoubleWishboneInstantLinks,
     DoubleWishboneKinematicLookup,
     KinematicsMode,
@@ -26,6 +25,7 @@ from _0_Utils.kin_py.lookup import (
     VehicleKinematicState,
     VehicleKinematics,
     create_kinematics,
+    kinematic_curves_payload,
 )
 
 __all__ = [
@@ -33,6 +33,8 @@ __all__ = [
     "AxleKinematicState",
     "BUMP_CURVE_SOURCES",
     "CornerInstantLink",
+    "CornerKinematics",
+    "CornerPointSet",
     "DEFAULT_ROLL_DEG",
     "DEFAULT_SWEEP_M",
     "DoubleWishboneInstantLinks",
@@ -41,8 +43,6 @@ __all__ = [
     "KinematicsMode",
     "NonlinearDoubleWishboneKinematics",
     "ROLL_CURVE_SOURCES",
-    "CornerKinematics",
-    "CornerPointSet",
     "VehicleKinematicState",
     "VehicleKinematics",
     "create_kinematics",

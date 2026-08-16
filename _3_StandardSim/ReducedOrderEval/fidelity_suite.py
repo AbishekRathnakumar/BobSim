@@ -25,11 +25,8 @@ from _0_Utils.dyn_py import (
     DOFModel,
     ModelInputs,
     TransientResult,
+    Vehicle,
     compare_transient_signals,
-    create_model,
-    load_reduced_vehicle_parameters,
-    simulate_transient,
-    solve_steady_state,
 )
 from _0_Utils.plotting.plot_engine import PlotEngine
 from _0_Utils.vehicle_io import repo_root
@@ -121,7 +118,8 @@ def run_fidelity_suite(
     output = _root_path(root, output_directory)
     output.mkdir(parents=True, exist_ok=True)
     mbd = _root_path(root, mbd_directory) if mbd_directory is not None else None
-    parameters = load_reduced_vehicle_parameters(vehicle_path)
+    vehicle = Vehicle.from_yaml(vehicle_path)
+    parameters = vehicle.parameters
     cases = tuple(
         case for case in default_cases() if case_names is None or case.name in case_names
     )
@@ -135,8 +133,7 @@ def run_fidelity_suite(
         case_output.mkdir(parents=True, exist_ok=True)
         results: dict[str, TransientResult] = {}
         for dof in MODEL_DOFS:
-            model = create_model(dof, parameters)
-            trim = solve_steady_state(model, speed_mps=case.speed_mps)
+            trim = vehicle.steady_state(dof, speed_mps=case.speed_mps)
             if not trim.success:
                 raise RuntimeError(
                     f"Could not initialize {dof}DOF {case.name}: {trim.message}"
@@ -147,8 +144,8 @@ def run_fidelity_suite(
                 case.stop_time_s + 0.5 * case.sample_period_s,
                 case.sample_period_s,
             )
-            result = simulate_transient(
-                model,
+            result = vehicle.simulate(
+                dof,
                 initial_state=trim.state,
                 controls=controls,
                 time_s=time,

@@ -23,6 +23,10 @@ ggv:
   ax_binary_iterations: 8
   max_abs_beta_rad: 0.25
   max_abs_steering_rad: 0.5
+  enforce_tire_load_range: true
+  # Keep the routine all-DOF visual smoke pass fast. Study-grade GGV/lap
+  # configs enable the dense disconnected-branch audit.
+  trim_multistart: false
 
 ymd:
   speed_mps: 12.0
@@ -32,6 +36,7 @@ ymd:
   roadwheel_min_deg: -12.0
   roadwheel_max_deg: 12.0
   roadwheel_points: 9
+  enforce_tire_load_range: true
 
 lap:
   line_mode: minimum_time_qss
