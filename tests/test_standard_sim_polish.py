@@ -282,6 +282,19 @@ def test_four_post_report_uses_jacking_antiroll_plot_without_raw_appendix() -> N
         ]
 
 
+def test_four_post_defaults_fail_if_a_roll_pulse_unloads_a_contact_patch() -> None:
+    for rel_path in (
+        Path("_3_StandardSim/FourPostEval/four_post_eval_config.yml"),
+        Path("_5_App/sim_configs/_defaults/four-post.yml"),
+    ):
+        config = _load_yaml(rel_path)
+        assert config["procedure"]["rollMagnitude"] == pytest.approx(
+            FOUR_POST_DEFAULT_ROLL_MAGNITUDE_RAD
+        )
+        assert config["validation"]["min_contact_fz_n"] == pytest.approx(1.0)
+        assert config["validation"]["fail_on_contact_loss"] is True
+
+
 def test_four_post_report_normalizer_disables_raw_appendix_for_legacy_app_data_config() -> None:
     config = {
         "report": {"enabled": True},

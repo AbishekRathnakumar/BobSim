@@ -301,6 +301,8 @@ def _four_post_result_from_kinematics(
         for prefix in prefixes.values():
             write_axis(prefix, time, roll=roll_rad)
             result[f"{prefix}.fy"][index_by_time[time]] = 1000.0
+            result[f"{prefix}.leftFz"][index_by_time[time]] = 1000.0
+            result[f"{prefix}.rightFz"][index_by_time[time]] = 1000.0
 
     return result
 

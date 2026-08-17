@@ -36,8 +36,9 @@ FOUR_POST_RATIO_ABS_LIMIT = 1e4
 FOUR_POST_FRACTION_ABS_LIMIT = 10.0
 FOUR_POST_PERCENT_ABS_LIMIT = 1e3
 FOUR_POST_MOTION_RATIO_ABS_LIMIT = 20.0
-FOUR_POST_DEFAULT_ROLL_MAGNITUDE_RAD = 0.02181661564992912
+FOUR_POST_DEFAULT_ROLL_MAGNITUDE_RAD = 0.01308996938995747
 FOUR_POST_LEGACY_ROLL_MAGNITUDE_RAD = 0.035
+FOUR_POST_MIN_CONTACT_FZ_N = 1.0
 
 
 FOUR_POST_EVAL_SIGNALS = [
@@ -1375,6 +1376,35 @@ class FourPostEvalSim:
             start_s=FOUR_POST_ROLL_START_S,
             count=FOUR_POST_ROLL_POSE_COUNT,
         )
+        roll_contact_samples = []
+        for prefix in ("frKnC", "rrKnC"):
+            for side in ("left", "right"):
+                _, contact_fz, _ = sample_force_pulses(
+                    roll,
+                    sig(prefix, f"{side}Fz"),
+                    sig(prefix, "fy"),
+                    start_s=FOUR_POST_ROLL_START_S,
+                    count=FOUR_POST_ROLL_POSE_COUNT,
+                    subtract_tail=False,
+                )
+                roll_contact_samples.append(contact_fz)
+        roll_contact_fz = np.vstack(roll_contact_samples)
+        validation_cfg = _as_mapping(self.config.get("validation"), name="validation")
+        min_contact_fz_n = float(
+            validation_cfg.get("min_contact_fz_n", FOUR_POST_MIN_CONTACT_FZ_N)
+        )
+        roll_contact_loaded = np.all(
+            np.isfinite(roll_contact_fz) & (roll_contact_fz >= min_contact_fz_n),
+            axis=0,
+        )
+        if validation_cfg.get("fail_on_contact_loss", False) and not np.all(roll_contact_loaded):
+            invalid_roll_deg = np.degrees(fr_roll_jack_x[~roll_contact_loaded])
+            invalid_text = ", ".join(f"{value:+.2f}" for value in invalid_roll_deg)
+            raise ValueError(
+                "FourPost roll-force evaluation lost contact-patch load at "
+                f"roll angles [{invalid_text}] deg (minimum required Fz "
+                f"{min_contact_fz_n:.1f} N). Reduce procedure.rollMagnitude or fix the suspension setup."
+            )
         fr_total_fz = corner_signal("frKnC", "fr_l", "Fz") + corner_signal("frKnC", "fr_r", "Fz")
         rr_total_fz = corner_signal("rrKnC", "rr_l", "Fz") + corner_signal("rrKnC", "rr_r", "Fz")
         _, fr_roll_fz_delta, _ = sample_force_pulses(
@@ -1466,8 +1496,8 @@ class FourPostEvalSim:
         fr_anti_heave = fr_anti_heave[mask_fr_h]
         rr_anti_heave = rr_anti_heave[mask_rr_h]
 
-        mask_fr = np.isfinite(fr_roll_jack_x) & np.isfinite(fr_anti_roll)
-        mask_rr = np.isfinite(rr_roll_jack_x) & np.isfinite(rr_anti_roll)
+        mask_fr = np.isfinite(fr_roll_jack_x) & np.isfinite(fr_anti_roll) & roll_contact_loaded
+        mask_rr = np.isfinite(rr_roll_jack_x) & np.isfinite(rr_anti_roll) & roll_contact_loaded
         fr_roll_x = fr_roll_jack_x[mask_fr]
         rr_roll_x = rr_roll_jack_x[mask_rr]
         fr_anti_roll = fr_anti_roll[mask_fr]
@@ -1725,6 +1755,9 @@ class FourPostEvalSim:
             "avg_anti_squat_pct": _nanmean_plausible(rr_anti_heave, FOUR_POST_PERCENT_ABS_LIMIT),
             "avg_anti_roll_front_pct": _nanmean_plausible(fr_anti_roll, FOUR_POST_PERCENT_ABS_LIMIT),
             "avg_anti_roll_rear_pct": _nanmean_plausible(rr_anti_roll, FOUR_POST_PERCENT_ABS_LIMIT),
+            "roll_contact_valid_points": int(np.count_nonzero(roll_contact_loaded)),
+            "roll_contact_rejected_points": int(np.count_nonzero(~roll_contact_loaded)),
+            "minimum_roll_pulse_contact_fz_n": float(np.nanmin(roll_contact_fz)),
             "avg_lltd_front_frac": _nanmean_plausible(lltd_roll, FOUR_POST_FRACTION_ABS_LIMIT),
             "avg_lltd_front_pct": float(
                 100.0 * _nanmean_plausible(lltd_roll, FOUR_POST_FRACTION_ABS_LIMIT)

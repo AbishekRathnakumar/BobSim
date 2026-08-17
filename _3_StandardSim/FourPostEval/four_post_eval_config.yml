@@ -34,9 +34,13 @@ model_overrides:
 procedure:
   steerMagnitude: 0.0
   heaveMagnitude: 0.03
-  # 1.25 deg keeps the roll sweep inside the loaded contact-patch range.
-  rollMagnitude: 0.02181661564992912
+  # 0.75 deg keeps all four contact patches loaded during the 1000 N lateral pulse.
+  rollMagnitude: 0.01308996938995747
   forceMagnitude: 1000
+
+validation:
+  min_contact_fz_n: 1.0
+  fail_on_contact_loss: true
 
 report:
   enabled: true
