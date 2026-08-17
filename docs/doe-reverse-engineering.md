@@ -208,3 +208,31 @@ make opt-envelope
 ```
 
 It has no reverse-lookup equivalent today.
+
+## Longitudinal CG-bias study
+
+`_4_OptSim/CGBiasStudy/` keeps three otherwise confounded questions separate:
+
+1. a synthetic CG-only sweep with ARBs and brake bias fixed;
+2. a bounded ARB-allocation/brake-bias search at every synthetic CG; and
+3. packaging-bounded grouped-component layouts with full inertia recomputation.
+
+Run the compact plumbing and physics gate first:
+
+```bash
+make cg-bias-smoke
+```
+
+The dense fixed/retuned/layout QSS grid is explicit and intentionally expensive:
+
+```bash
+make cg-bias-full
+```
+
+Disposable variants, raw envelopes/laps, tables, figures, fingerprints, and
+blocking-gate status land under `temp/cg_bias_study/`. The smoke stage is not a
+design conclusion. In particular, its grouped accumulator/cooling/other mass
+inputs are declared engineering assumptions until replaced by CAD mass
+properties and packaging bounds.
+The command does not waive the separate transient, uncertainty, resolution,
+or BobLib/vehicle-correlation gates recorded in the study manifest.

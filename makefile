@@ -90,7 +90,7 @@ CLEAN_DOCKER_IMAGE ?= bobdyn/bobsim:latest
 	lap-eval lap-eval-qss lap-eval-transient lap-eval-all-dof \
 	lap-validation-visuals \
 	envelope-ggv envelope-ymd envelope-all \
-	opt-standard opt-envelope opt-refined opt-search opt-doe-smoke \
+	opt-standard opt-envelope opt-refined opt-search opt-doe-smoke cg-bias-smoke cg-bias-full \
 	clean clean-app clean-visual clean-standard clean-envelope clean-opt clean-owned clean-all
 
 ifeq ($(OS),Windows_NT)
@@ -151,6 +151,8 @@ help:
 		'  envelope-all              Generate all envelope outputs' \
 		'' \
 		'  opt-doe-smoke             Check DOE plumbing without OpenModelica' \
+		'  cg-bias-smoke             Run the compact longitudinal-CG pipeline gate' \
+		'  cg-bias-full              Run the dense fixed/retuned/layout QSS sweep' \
 		'  opt-standard              Run StandardSens pre-screen sensitivities' \
 		'  opt-envelope              Run EnvelopeSens sensitivities' \
 		'  opt-refined               Run StandardSens refined response surfaces' \
@@ -328,6 +330,12 @@ $(FOUR_POST_METRICS):
 
 opt-doe-smoke:
 	$(RUN) $(PYTHON) -m pytest tests/test_doe_pipeline.py -q
+
+cg-bias-smoke:
+	$(RUN) $(PYTHON) -m _4_OptSim.CGBiasStudy.cg_bias_study --stage smoke
+
+cg-bias-full:
+	$(RUN) $(PYTHON) -m _4_OptSim.CGBiasStudy.cg_bias_study --stage full
 
 opt-standard: $(FOUR_POST_METRICS)
 	$(RUN) env $(DOE_ENV) PYTHONPATH=$(WORKSPACE)/_4_OptSim:$(WORKSPACE) $(PYTHON) -m StandardSens.pre_screen_sensitivities

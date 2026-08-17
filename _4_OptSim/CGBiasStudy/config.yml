@@ -1,0 +1,107 @@
+schema: bobsim.cg-bias-study.v1
+vehicle: vehicle.yml
+output_directory: temp/cg_bias_study
+
+rear_weight_sweep_pct: [50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60]
+
+setup_optimization:
+  # Declared study bounds, not measured hardware adjustability limits.
+  front_arb_allocation_bounds: [0.30, 0.75]
+  brake_front_bias_bounds: [0.60, 0.90]
+  smoke_grid_points: 2
+  full_grid_points: 7
+  preserve_total_effective_arb_roll_stiffness: true
+
+events:
+  acceleration:
+    distance_m: 75.0
+    power_limit_w: 80000
+  skidpad:
+    radius_m: 9.125
+    power_limit_w: 80000
+  autocross:
+    track: _3_StandardSim/LapTimeEval/tracks/endurance_reference.csv
+    power_limit_w: 80000
+  endurance:
+    track: _3_StandardSim/LapTimeEval/tracks/endurance_michigan_2019.csv
+    power_limit_w: 32000
+    sensitivity_power_w: [28000, 32000, 36000]
+
+ggv:
+  smoke:
+    model_dof: 3
+    speeds_mps: [6, 18, 30]
+    ay_max_g: 2.8
+    ay_points: 7
+    ax_binary_iterations: 5
+    trim_multistart: false
+  full:
+    model_dof: 3
+    speeds_mps: [3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 34, 38, 42]
+    ay_max_g: 3.2
+    ay_points: 41
+    ax_binary_iterations: 12
+    trim_multistart: true
+  max_abs_beta_rad: 0.25
+  max_abs_steering_rad: 0.50
+  enforce_tire_load_range: true
+
+lap:
+  vehicle_width_m: 1.35
+  safety_margin_m: 0.15
+  sample_step_m: 3.0
+  max_speed_mps: 42.0
+
+# These groups exactly close back to the baseline 160.64 kg sprung-mass CG and
+# inertia. Their identities and packaging boxes are provisional engineering
+# assumptions until replaced by CAD mass properties.
+realizable_layout:
+  groups:
+    chassis_and_fixed:
+      mass_kg: 70.64
+      cg_m: [-0.8237372593431481, 0.0, 0.25]
+      inertia_kg_m2:
+        - [10.39, 0.3, -0.93]
+        - [0.3, 51.7354133635334, -0.05]
+        - [-0.93, -0.05, 52.5054133635334]
+      x_bounds_m: [-0.8237372593431481, -0.8237372593431481]
+    accumulator:
+      mass_kg: 50.0
+      cg_m: [-1.10, 0.0, 0.25]
+      inertia_kg_m2: [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+      x_bounds_m: [-1.25, -0.85]
+    cooling:
+      mass_kg: 20.0
+      cg_m: [-0.65, 0.0, 0.25]
+      inertia_kg_m2: [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+      x_bounds_m: [-0.90, -0.40]
+    other_movable:
+      mass_kg: 20.0
+      cg_m: [-1.08, 0.0, 0.25]
+      inertia_kg_m2: [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+      x_bounds_m: [-1.20, -0.65]
+  driver_x_bounds_m: [-0.65, -0.45]
+  layouts:
+    forward:
+      driver_x_m: -0.45
+      accumulator_x_m: -0.85
+      cooling_x_m: -0.40
+      other_movable_x_m: -0.65
+    baseline:
+      driver_x_m: -0.541837
+      accumulator_x_m: -1.10
+      cooling_x_m: -0.65
+      other_movable_x_m: -1.08
+    rearward:
+      driver_x_m: -0.65
+      accumulator_x_m: -1.25
+      cooling_x_m: -0.90
+      other_movable_x_m: -1.20
+
+uncertainty:
+  tire_peak_scale: [0.95, 1.0, 1.05]
+  tire_load_sensitivity_scale: [0.8, 1.0, 1.2]
+  aero_downforce_scale: [0.9, 1.0, 1.1]
+  aero_drag_scale: [0.9, 1.0, 1.1]
+  aero_cop_shift_m: [-0.05, 0.0, 0.05]
+  surface_grip_scale: [0.95, 1.0, 1.05]
