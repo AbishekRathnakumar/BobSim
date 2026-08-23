@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from _5_App.http_utils import parse_byte_range as _parse_byte_range
-from _5_App.kinematics import kinematic_curves_payload
+from _0_Utils.kin_py import kinematic_curves_payload
 
 
 ROOT = Path.cwd()

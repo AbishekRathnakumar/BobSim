@@ -3,7 +3,7 @@ RUFF_CACHE_DIR ?= /tmp/bobsim-ruff-cache
 MYPY_CACHE_DIR ?= /tmp/bobsim-mypy-cache
 
 QUALITY_DIRS := _0_Utils _1_VisualSim _2_EnvelopeSim _3_StandardSim _4_OptSim _5_App tests
-TYPECHECK_DIRS := _0_Utils _1_VisualSim _3_StandardSim _5_App tests
+TYPECHECK_DIRS := _0_Utils _1_VisualSim _2_EnvelopeSim _3_StandardSim _4_OptSim _5_App tests
 BOBLIB_PATH := _0_Utils/external/BobLib
 BOBLIB_PACKAGE_PATH := $(BOBLIB_PATH)/BobLib
 VEHICLE_SIM_CLASS := BobLib.Experiments.Standards.VehicleSim

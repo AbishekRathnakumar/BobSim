@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import shutil
 import zipfile
 
@@ -9,6 +10,7 @@ import pytest
 import yaml
 
 from _0_Utils.deploy import deploy
+from _0_Utils.kin_py import KINEMATIC_CURVE_META
 from _3_StandardSim import _modelica_runner
 from _3_StandardSim._modelica_runner import ModelicaRunner
 from _5_App import app
@@ -1237,6 +1239,44 @@ def test_app_generates_live_kinematic_curves_for_active_vehicle() -> None:
     assert len(payload["axles"]["rear"]["curves"]["bump_toe_deg"]) == 20
     assert len(payload["axles"]["front"]["curves"]["roll_camber_deg"]) == 20
     assert payload["warnings"] == []
+
+
+def test_frontend_kinematic_plot_fallbacks_reflect_unit_tested_curve_metadata() -> None:
+    app_js = (app.ROOT / "_5_App/static/app.js").read_text(encoding="utf-8")
+    match = re.search(r"const DEFAULT_KINEMATIC_CURVES = \[(?P<body>.*?)\];", app_js, re.S)
+    assert match is not None
+
+    fallback_curves = [
+        {
+            "id": item.group("id"),
+            "label": item.group("label"),
+            "unit": item.group("unit"),
+            "x_id": item.group("x_id"),
+            "x_label": item.group("x_label"),
+            "x_unit": item.group("x_unit"),
+            "y_label": item.group("y_label"),
+        }
+        for item in re.finditer(
+            r'\{\s*id: "(?P<id>[^"]+)", label: "(?P<label>[^"]+)", unit: "(?P<unit>[^"]+)", '
+            r'x_id: "(?P<x_id>[^"]+)", x_label: "(?P<x_label>[^"]+)", x_unit: "(?P<x_unit>[^"]+)", '
+            r'y_label: "(?P<y_label>[^"]+)"\s*\}',
+            match.group("body"),
+        )
+    ]
+
+    expected_curves = [
+        {
+            "id": item["id"],
+            "label": item["label"],
+            "unit": item["unit"],
+            "x_id": item["x_id"],
+            "x_label": item["x_label"],
+            "x_unit": item["x_unit"],
+            "y_label": item["y_label"],
+        }
+        for item in KINEMATIC_CURVE_META
+    ]
+    assert fallback_curves == expected_curves
 
 
 def test_app_lists_reads_and_saves_tire_templates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

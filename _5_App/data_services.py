@@ -189,7 +189,9 @@ def _csv_source_summary(path: Path, *, sample_limit: int = 240) -> dict[str, Any
         for column in columns
         if non_empty_counts[column] > 0 and numeric_counts[column] / non_empty_counts[column] >= 0.85
     ]
-    x_candidates = [column for column in ("time", "Time", "t", "speed_mps") if column in numeric_columns]
+    x_candidates: list[str] = [
+        column for column in ("time", "Time", "t", "speed_mps") if column in numeric_columns
+    ]
     x_candidates.extend(column for column in numeric_columns if column not in x_candidates)
     return {
         "id": rel_path,

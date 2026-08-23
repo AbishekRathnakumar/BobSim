@@ -1823,7 +1823,7 @@ def _add_title_page(pdf: PdfPages, report_cfg: dict[str, Any]) -> None:
     logo_path = REPO_ROOT / "_0_Utils/reporting/media/bob.png"
     if logo_path.exists():
         logo = plt.imread(logo_path)
-        ax_logo = fig.add_axes([0.03, 0.72, 0.22, 0.19])
+        ax_logo = fig.add_axes((0.03, 0.72, 0.22, 0.19))
         ax_logo.imshow(logo, alpha=0.82)
         ax_logo.axis("off")
 
@@ -2431,7 +2431,7 @@ def _interp_valid(x: np.ndarray, y: np.ndarray, target: float) -> float:
 def _trapz(y: np.ndarray, x: np.ndarray) -> float:
     if hasattr(np, "trapezoid"):
         return float(np.trapezoid(y, x))
-    return float(np.trapz(y, x))
+    return float(np.trapz(y, x))  # type: ignore[attr-defined]  # numpy<2 fallback
 
 
 def main() -> None:
