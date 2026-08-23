@@ -1,0 +1,11 @@
+{
+  "baseline_implied_contact_patch_mm": 1.1981206099999895,
+  "baseline_wheel_centre_z_mm": 201.08812,
+  "dz_mm": -4.930000159220072e-07,
+  "loaded_radius_mm": 199.88999939,
+  "reason": "Conflicting datum evidence. Reading the trailing scalar as the loaded rolling radius (199.890 mm), a shared ground-plane datum implies a contact patch at z = 0. The baseline lands at +1.198 mm (consistent); the SHARK wheel centre lands at +1.198 mm (inconsistent). TITLES carries no annotation to settle it. The -0.000 mm offset is therefore NOT confirmed as a ride-height change, and z-dependent curves are withheld until it is.",
+  "shark_implied_contact_patch_mm": 1.1981201169999736,
+  "shark_wheel_centre_z_mm": 201.088119507,
+  "status": "unresolved",
+  "titles": []
+}
