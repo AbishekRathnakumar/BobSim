@@ -81,6 +81,50 @@ KINEMATIC_CURVE_META = [
         "roll_rc_z_mm", "Roll RC z-Migration", "mm", "roll_deg", "Roll", "deg", "RC z-Position",
         "Plot26",
     ),
+    # Front-view instant centres and roll-centre height/migration are solved in
+    # curve_values() but were dropped by this registry, so nothing downstream could
+    # plot them. Side-view instant centres stay unpublished on purpose - see the
+    # explicit exclusion in tests/test_kinematics.py.
+    _curve_meta(
+        "bump_front_ic_y_mm", "Bump Front-View IC y", "mm", "jounce_mm", "Jounce", "mm",
+        "Front-View IC y", "Plot31",
+    ),
+    _curve_meta(
+        "bump_front_ic_z_mm", "Bump Front-View IC z", "mm", "jounce_mm", "Jounce", "mm",
+        "Front-View IC z", "Plot32",
+    ),
+    _curve_meta(
+        "bump_front_swing_arm_mm", "Bump Front-View Swing Arm", "mm", "jounce_mm", "Jounce", "mm",
+        "Swing Arm Length", "Plot33",
+    ),
+    _curve_meta(
+        "bump_rc_height_mm", "Bump RC Height", "mm", "jounce_mm", "Jounce", "mm",
+        "RC Height above Contact Patch", "Plot38",
+    ),
+    _curve_meta(
+        "bump_rc_migration_mm", "Bump RC Migration", "mm", "jounce_mm", "Jounce", "mm",
+        "RC Migration", "Plot39",
+    ),
+    _curve_meta(
+        "roll_front_ic_y_mm", "Roll Front-View IC y", "mm", "roll_deg", "Roll", "deg",
+        "Front-View IC y", "Plot41",
+    ),
+    _curve_meta(
+        "roll_front_ic_z_mm", "Roll Front-View IC z", "mm", "roll_deg", "Roll", "deg",
+        "Front-View IC z", "Plot42",
+    ),
+    _curve_meta(
+        "roll_front_swing_arm_mm", "Roll Front-View Swing Arm", "mm", "roll_deg", "Roll", "deg",
+        "Swing Arm Length", "Plot43",
+    ),
+    _curve_meta(
+        "roll_rc_height_mm", "Roll RC Height", "mm", "roll_deg", "Roll", "deg",
+        "RC Height above Contact Patch", "Plot47",
+    ),
+    _curve_meta(
+        "roll_rc_migration_mm", "Roll RC Migration", "mm", "roll_deg", "Roll", "deg",
+        "RC Migration", "Plot48",
+    ),
 ]
 
 BUMP_CURVE_SOURCES = {
@@ -92,6 +136,11 @@ BUMP_CURVE_SOURCES = {
     "bump_scrub_mm": "scrub_mm",
     "bump_rc_y_mm": "rc_y_mm",
     "bump_rc_z_mm": "rc_z_mm",
+    "bump_front_ic_y_mm": "front_ic_y_mm",
+    "bump_front_ic_z_mm": "front_ic_z_mm",
+    "bump_front_swing_arm_mm": "front_swing_arm_mm",
+    "bump_rc_height_mm": "roll_center_height_mm",
+    "bump_rc_migration_mm": "roll_center_migration_mm",
 }
 
 ROLL_CURVE_SOURCES = {
@@ -103,6 +152,11 @@ ROLL_CURVE_SOURCES = {
     "roll_scrub_mm": "scrub_mm",
     "roll_rc_y_mm": "rc_y_mm",
     "roll_rc_z_mm": "rc_z_mm",
+    "roll_front_ic_y_mm": "front_ic_y_mm",
+    "roll_front_ic_z_mm": "front_ic_z_mm",
+    "roll_front_swing_arm_mm": "front_swing_arm_mm",
+    "roll_rc_height_mm": "roll_center_height_mm",
+    "roll_rc_migration_mm": "roll_center_migration_mm",
 }
 
 

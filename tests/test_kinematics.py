@@ -428,8 +428,10 @@ def test_corner_kinematics_payload_reports_complete_active_vehicle_sweep() -> No
     assert payload["axles"]["rear"]["ok"] is True
     assert len(payload["sweep_m"]) == 20
     assert len(payload["roll_deg"]) == 20
-    assert len(payload["curve_meta"]) == 16
-    assert [item["source_plot"] for item in payload["curve_meta"]] == [
+    assert len(payload["curve_meta"]) == len(KINEMATIC_CURVE_META)
+    # The original sixteen curves keep their identity and ordering; instant-centre
+    # and roll-centre curves were appended after them.
+    assert [item["source_plot"] for item in payload["curve_meta"]][:16] == [
         "Plot1",
         "Plot2",
         "Plot3",
