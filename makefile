@@ -46,7 +46,14 @@ DEPLOY_SKIP_CONFLICT_CHECK_ARG := $(if $(filter 1 true yes,$(DEPLOY_SKIP_CONFLIC
 DEPLOY_VERSION_ARG := $(if $(DEPLOY_VERSION),--version $(DEPLOY_VERSION),)
 DEPLOY_UPLOAD_RELEASE_ARG := $(if $(filter 1 true yes,$(DEPLOY_UPLOAD_RELEASE)),--upload-release,)
 
+# Same cmd.exe parsing problem as COMPOSE below: this POSIX test prints "-f was
+# unexpected at this time" on Windows. A Windows host is never inside the Linux
+# container, so the answer there is simply empty.
+ifeq ($(OS),Windows_NT)
+IN_CONTAINER :=
+else
 IN_CONTAINER := $(shell if [ -f /.dockerenv ]; then printf 1; fi)
+endif
 
 ifeq ($(IN_CONTAINER),1)
 RUN :=
@@ -57,7 +64,16 @@ SHELL_STANDARD_CMD := cd _3_StandardSim && bash
 SHELL_ENVELOPE_CMD := cd _2_EnvelopeSim && bash
 SHELL_OPT_CMD := cd _4_OptSim && bash
 else
+# The probe below is POSIX shell. On Windows make runs it through cmd.exe, which
+# cannot parse `if ...; then ...; fi`: it prints "compose was unexpected at this
+# time" and yields an empty COMPOSE, so every Docker target degrades to a bare
+# `run --rm -T bobsim ...` and dies in CreateProcess. Docker Desktop has shipped
+# Compose v2 as `docker compose` for years, so skip the probe there entirely.
+ifeq ($(OS),Windows_NT)
+COMPOSE ?= docker compose
+else
 COMPOSE ?= $(shell if docker compose version >/dev/null 2>&1; then printf "docker compose"; elif command -v docker-compose >/dev/null 2>&1; then printf "docker-compose"; else printf "docker compose"; fi)
+endif
 RUN := $(COMPOSE) run --rm -T bobsim
 DOCKER_BUILD_CMD := $(COMPOSE) build
 DOCKER_REBUILD_CMD := $(COMPOSE) build --no-cache
@@ -245,9 +261,13 @@ $(FOUR_POST_SIM_EXE): $(FOUR_POST_SIM_MODEL) $(BUILD_FOUR_POST_MOS) $(BOBLIB_PAC
 
 # SHARK is optional: with it, the file is imported into the tracked variant vehicle
 # first; without it, the already-imported variant is overlaid as it stands.
+#
+# Runs on the host, not through $(RUN). The kinematic solve is pure Python and needs
+# no Modelica toolchain, so a container buys nothing here. Only ARGS=--four-post
+# needs Docker, and that path shells out to `make standard-build-four-post` itself.
+SHARK_ARG := $(if $(SHARK),--shark $(SHARK),)
 shark-overlay:
-	$(RUN) $(PYTHON) -m _3_StandardSim.FourPostEval.shark_overlay_report \
-		$(if $(SHARK),--shark '$(SHARK)') $(ARGS)
+	$(PYTHON) -m _3_StandardSim.FourPostEval.shark_overlay_report $(SHARK_ARG) $(ARGS)
 
 standard-build: $(VEHICLE_SIM_EXE)
 
