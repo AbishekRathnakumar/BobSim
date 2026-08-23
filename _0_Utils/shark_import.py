@@ -74,13 +74,18 @@ def _numbers(line: str) -> list[float]:
         return []
 
 
-def parse_shark(path: str | Path) -> dict[str, tuple[float, float, float]]:
+def parse_shark(path: str | Path) -> dict[str, Any]:
     """Return the named hardpoints of a SHARK file, in millimetres.
 
     Point *names* come from the TEMP_SETTINGS block and coordinates from the
     geometry block; they are paired by position. Pairing by name rather than by
     index means a layout we do not recognise fails loudly instead of silently
     mapping the wrong point.
+
+    Values are xyz tuples except for the dunder keys, which carry file-level
+    metadata: `__template__` (str), `__loaded_radius_mm__` (float or None) and
+    `__titles__` (list of str). Hence the loose value type - narrowing it to a
+    tuple would be a lie the callers then have to work around.
     """
     lines = Path(path).read_text(encoding="utf-8", errors="ignore").splitlines()
 
@@ -112,10 +117,10 @@ def parse_shark(path: str | Path) -> dict[str, tuple[float, float, float]]:
             f"{path}: found {len(names)} point names but only {len(coords)} coordinate triples"
         )
 
-    points = {name: coords[i] for i, name in enumerate(names)}
-    points["__template__"] = template_name  # type: ignore[assignment]
-    points["__loaded_radius_mm__"] = scalars[0] if scalars else None  # type: ignore[assignment]
-    points["__titles__"] = _titles(lines)  # type: ignore[assignment]
+    points: dict[str, Any] = {name: coords[i] for i, name in enumerate(names)}
+    points["__template__"] = template_name
+    points["__loaded_radius_mm__"] = scalars[0] if scalars else None
+    points["__titles__"] = _titles(lines)
     return points
 
 
