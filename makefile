@@ -113,6 +113,8 @@ help:
 		'' \
 		'  standard-build            Build BobLib VehicleSim' \
 		'  standard-build-four-post  Build BobLib FourPostSim' \
+		'  shark-overlay             Overlay the imported car against Orion on the kinematic' \
+		'                            curves ([SHARK=file.shk] [ARGS=--four-post|--keep-arb])' \
 		'' \
 		'  standard-eval-ramp-steer   Run RampSteerEval' \
 		'  standard-eval-steady-state Run SteadyStateEval' \
@@ -225,11 +227,27 @@ shell-opt:
 sync-vehicle:
 	@printf '%s\n' 'Static BobLib models use checked-in Modelica records; vehicle.yml remains a BobSim projection/report input.'
 
-$(VEHICLE_SIM_EXE): $(VEHICLE_SIM_MODEL) $(BUILD_VEHICLE_MOS) $(BOBLIB_PACKAGE_PATH)/package.mo
+# The generated vehicle records and templates hold every hardpoint, so they must be
+# build dependencies. Without them make reports "up to date" after a geometry change
+# and the sim silently runs the previously compiled geometry.
+GENERATED_RECORDS := $(wildcard $(BOBLIB_PACKAGE_PATH)/Records/VehicleDefn/*.mo)
+GENERATED_TEMPLATES := \
+	$(wildcard $(BOBLIB_PACKAGE_PATH)/Experiments/Standards/Templates/Vehicle/*.mo) \
+	$(wildcard $(BOBLIB_PACKAGE_PATH)/Experiments/Standards/Templates/FourPost/*.mo)
+
+$(VEHICLE_SIM_EXE): $(VEHICLE_SIM_MODEL) $(BUILD_VEHICLE_MOS) $(BOBLIB_PACKAGE_PATH)/package.mo \
+		$(GENERATED_RECORDS) $(GENERATED_TEMPLATES)
 	$(RUN) bash -lc 'omc $(WORKSPACE)/$(BUILD_VEHICLE_MOS) && test -f $(WORKSPACE)/$(VEHICLE_SIM_EXE)'
 
-$(FOUR_POST_SIM_EXE): $(FOUR_POST_SIM_MODEL) $(BUILD_FOUR_POST_MOS) $(BOBLIB_PACKAGE_PATH)/package.mo
+$(FOUR_POST_SIM_EXE): $(FOUR_POST_SIM_MODEL) $(BUILD_FOUR_POST_MOS) $(BOBLIB_PACKAGE_PATH)/package.mo \
+		$(GENERATED_RECORDS) $(GENERATED_TEMPLATES)
 	$(RUN) bash -lc 'omc $(WORKSPACE)/$(BUILD_FOUR_POST_MOS) && test -f $(WORKSPACE)/$(FOUR_POST_SIM_EXE)'
+
+# SHARK is optional: with it, the file is imported into the tracked variant vehicle
+# first; without it, the already-imported variant is overlaid as it stands.
+shark-overlay:
+	$(RUN) $(PYTHON) -m _3_StandardSim.FourPostEval.shark_overlay_report \
+		$(if $(SHARK),--shark '$(SHARK)') $(ARGS)
 
 standard-build: $(VEHICLE_SIM_EXE)
 
