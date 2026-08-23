@@ -63,6 +63,11 @@ _3_StandardSim/generated_results/**
 _3_StandardSim/results/**
 !_3_StandardSim/results/
 !_3_StandardSim/results/.gitkeep
+
+# Transient copy of vehicle.yml taken while the opt-in four-post run swaps it in
+# place. Normally removed on the way out; a leftover means a run was interrupted
+# and the tool refuses to start until it is resolved. Never a commit candidate.
+*.yml.overlay-backup
 _4_OptSim/Build/
 _4_OptSim/results/**
 !_4_OptSim/results/

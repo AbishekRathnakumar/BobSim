@@ -48,6 +48,40 @@ def test_delta_score_reports_absolute_and_relative() -> None:
     assert identical is not None and identical["ratio"] == 0.0
 
 
+def test_a_missing_datum_record_withholds_rather_than_publishes(tmp_path: Path) -> None:
+    """Absence of evidence must not read as evidence of a shared datum.
+
+    A vehicle with no sidecar - a fresh clone, a hand-written file - has an unknown
+    vertical datum, so the z-dependent curves stay withheld. Failing open here would
+    publish exactly the curves the datum question puts in doubt.
+    """
+    from _0_Utils.shark_import import read_datum_status, write_datum_sidecar
+
+    bare = tmp_path / "vehicle_bare.yml"
+    bare.write_text("front: {}\n", encoding="utf-8")
+    assert read_datum_status(bare) is None
+
+    # Only a positive "shared_ground_plane" clears the withholding.
+    write_datum_sidecar(bare, {"status": "unresolved"})
+    assert read_datum_status(bare) == "unresolved"
+    write_datum_sidecar(bare, {"status": "shared_ground_plane"})
+    assert read_datum_status(bare) == "shared_ground_plane"
+
+
+def test_interrupted_run_leaves_a_backup_that_blocks_the_next_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A leftover backup means vehicle.yml on disk is probably the wrong car."""
+    vehicle = tmp_path / "vehicle.yml"
+    vehicle.write_text("front: {}\n", encoding="utf-8")
+    monkeypatch.setattr(sor, "VEHICLE_YAML", vehicle)
+    vehicle.with_suffix(".yml.overlay-backup").write_text("front: {}\n", encoding="utf-8")
+
+    with pytest.raises(sor.StaleGeometryError, match="leftover backup"):
+        with sor.installed_vehicle(vehicle):
+            pass
+
+
 def test_z_dependent_curves_are_withheld_but_angles_are_not() -> None:
     """A rigid vertical translation moves heights, not angles or lengths."""
     assert "bump_rc_height_mm" in sor.Z_DEPENDENT_CURVE_IDS

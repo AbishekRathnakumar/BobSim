@@ -479,8 +479,20 @@ def installed_vehicle(source: Path) -> Iterator[Path]:
     The four-post stack reads the repo vehicle.yml by construction, so the opt-in
     sim path has to swap it. vehicle.yml is restored in a finally block; the
     kinematics path never touches it at all.
+
+    A leftover backup means a previous run was killed between the swap and the
+    restore, so the vehicle.yml on disk is whatever that run installed rather than
+    the baseline. Refuse instead of overwriting the good copy with the bad one.
     """
     backup = VEHICLE_YAML.with_suffix(".yml.overlay-backup")
+    if backup.exists():
+        raise StaleGeometryError(
+            f"A leftover backup exists at {backup.name}, so a previous four-post run was "
+            "interrupted before it could restore the baseline. The vehicle.yml on disk is "
+            "most likely the imported car, not the baseline.\n"
+            f"Compare the two, restore {VEHICLE_YAML.name} from the backup if it is wrong, "
+            "then delete the backup and re-run."
+        )
     shutil.copy2(VEHICLE_YAML, backup)
     try:
         if source.resolve() != VEHICLE_YAML.resolve():
@@ -629,9 +641,19 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # The datum caveat is a property of the imported file, not of this invocation, so
-    # it must survive a run that does not re-import.
-    if not withheld and read_datum_status(variant_path) not in (None, "shared_ground_plane"):
-        withheld = frozenset(Z_DEPENDENT_CURVE_IDS)
+    # it must survive a run that does not re-import. Absence of a record is treated as
+    # unknown, not as agreement: only a positive "shared_ground_plane" publishes the
+    # z-dependent curves, so a missing sidecar fails safe instead of silently
+    # publishing exactly what the datum question puts in doubt.
+    if not withheld:
+        datum_status = read_datum_status(variant_path)
+        if datum_status != "shared_ground_plane":
+            withheld = frozenset(Z_DEPENDENT_CURVE_IDS)
+            if datum_status is None:
+                notes.append(
+                    f"No datum record beside {variant_path.name}; withholding z-dependent "
+                    "curves rather than assuming the frames share a vertical datum."
+                )
 
     payloads = {
         BASELINE_LABEL: kinematic_payload(baseline_path),
