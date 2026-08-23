@@ -144,6 +144,38 @@ def test_front_import_merges_into_a_rear_imported_vehicle() -> None:
     assert merged["front"] != rear_merged["front"]
 
 
+def test_reimport_judges_the_datum_against_orion_not_the_imported_car(tmp_path: Path) -> None:
+    """Re-importing must not compare the SHARK file against itself.
+
+    Merging a second axle uses the already-imported car as the merge target. If the
+    datum were judged against that same car, dz collapses to zero and the evidence
+    becomes self-referential - which can report a shared ground plane that was never
+    established and silently un-withhold the z-dependent curves.
+    """
+    from _0_Utils.shark_import import write_vehicle
+
+    first, first_report = import_shark(SHARK_FIXTURE)
+    variant = tmp_path / "vehicle_variant.yml"
+    write_vehicle(first, variant)
+    assert first_report["datum"]["dz_mm"] == pytest.approx(1.190, abs=1e-3)
+
+    # Merge target is the imported car; datum reference stays the original baseline.
+    _second, second_report = import_shark(
+        SHARK_FIXTURE,
+        baseline_path=variant,
+        datum_baseline_path=repo_root() / "vehicle.yml",
+    )
+    datum = second_report["datum"]
+    assert datum["status"] == "unresolved"
+    assert datum["dz_mm"] == pytest.approx(1.190, abs=1e-3)
+    assert datum["baseline_implied_contact_patch_mm"] == pytest.approx(0.008, abs=1e-3)
+
+    # Without the guard the comparison degenerates: dz vanishes and both contact
+    # patches land on the same value, so the evidence says nothing.
+    _third, degenerate = import_shark(SHARK_FIXTURE, baseline_path=variant)
+    assert degenerate["datum"]["dz_mm"] == pytest.approx(0.0, abs=1e-5)
+
+
 def test_rod_attachment_is_derived_from_geometry() -> None:
     """This SHARK corner picks the pushrod up on the lower arm.
 

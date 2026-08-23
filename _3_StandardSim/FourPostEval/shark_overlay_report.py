@@ -609,6 +609,9 @@ def main(argv: list[str] | None = None) -> int:
         merged, report = import_shark(
             args.shark,
             baseline_path=import_baseline,
+            # Always judge the datum against Orion, never against a car already built
+            # from a SHARK file, which would compare the export to itself.
+            datum_baseline_path=baseline_path,
             keep_stabar=args.keep_arb,
             vehicle_name=VARIANT_LABEL,
         )

@@ -464,15 +464,25 @@ def import_shark(
     shark_path: str | Path,
     *,
     baseline_path: str | Path | None = None,
+    datum_baseline_path: str | Path | None = None,
     keep_stabar: bool = False,
     vehicle_name: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Import a SHARK corner into a copy of the baseline vehicle.
 
+    `baseline_path` is the vehicle the hardpoints are merged *into*, which for a
+    second-axle import is an already-imported car. `datum_baseline_path` is the
+    reference the vertical datum is judged against, and must stay the original
+    baseline: assessing the datum against a car built from this same SHARK file
+    compares the file to itself, collapses dz to zero, and can report a shared
+    ground plane that was never established. Defaults to `baseline_path` for the
+    ordinary first import, where the two are the same file.
+
     Returns the merged vehicle mapping and a report describing what was done.
     """
     baseline_path = Path(baseline_path) if baseline_path else repo_root() / "vehicle.yml"
     baseline = load_yaml(baseline_path)
+    datum_baseline = load_yaml(datum_baseline_path) if datum_baseline_path else baseline
     points = parse_shark(shark_path)
 
     check_single_side(points)
@@ -484,7 +494,7 @@ def import_shark(
 
     axle, planar_offset = detect_axle(points, baseline)
     frame = verify_shared_frame(points, baseline, axle)
-    datum = assess_z_datum(points, baseline, axle)
+    datum = assess_z_datum(points, datum_baseline, axle)
 
     merged = copy.deepcopy(baseline)
     merged[axle], notes = build_axle_block(points, baseline[axle], keep_stabar=keep_stabar)
@@ -562,6 +572,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("shark", help="Path to the .shk file")
     parser.add_argument("-o", "--output", required=True, help="Path to write the merged vehicle.yml")
     parser.add_argument("--baseline", default=None, help="Baseline vehicle.yml (default: repo vehicle.yml)")
+    parser.add_argument(
+        "--datum-baseline",
+        default=None,
+        help=(
+            "Reference for the vertical datum check. Set this to the original baseline "
+            "when merging a second axle onto an already-imported car."
+        ),
+    )
     parser.add_argument("--name", default=None, help="Vehicle name for the merged car")
     parser.add_argument(
         "--keep-arb",
@@ -576,6 +594,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     merged, report = import_shark(
         args.shark,
         baseline_path=args.baseline,
+        datum_baseline_path=args.datum_baseline,
         keep_stabar=args.keep_arb,
         vehicle_name=args.name,
     )
