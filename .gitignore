@@ -69,6 +69,12 @@ _3_StandardSim/results/**
 # and the tool refuses to start until it is resolved. Never a commit candidate.
 *.yml.overlay-backup
 
+# The vehicle a SHARK import produces. Regenerated from whichever .shk is passed
+# in, so it is per-run output rather than state: committing it would dirty a
+# tracked file on every test import and put one car's hardpoints in the repo as
+# though they were the baseline. vehicle.yml stays the tracked comparison target.
+vehicle_2027.yml
+
 # Datum assessment written beside an imported vehicle. Derived from the .shk and
 # the baseline, regenerated on every import, and never hand-edited, so it is
 # local metadata rather than state. Committing it risks the opposite of what it

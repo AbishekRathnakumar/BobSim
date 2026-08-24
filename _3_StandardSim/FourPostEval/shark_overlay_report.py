@@ -10,9 +10,12 @@ The four-post force sim remains available behind `--four-post`. It is secondary 
 experimental: it depends on actuation data that this workflow maintains outside
 BobSim, so its numbers can conflate a hardpoint change with an ARB or damper change.
 
-Baseline is `vehicle.yml` (Orion) and is never written to. The imported car lives in
-a tracked file (`vehicle_2027.yml` by default), not in generated_results/, so a later
-front-axle import can merge into the same file instead of re-running the rear.
+Baseline is `vehicle.yml` (Orion) and is never written to. The imported car is
+per-run output: point `--shark` at any .shk and it is rebuilt at `--variant`
+(`vehicle_2027.yml` by default, gitignored). Importing a second axle merges into
+whatever is already there, so a later front file lands beside an imported rear
+without re-running it, but nothing about that file is expected to survive the next
+import of a different .shk.
 """
 
 from __future__ import annotations
