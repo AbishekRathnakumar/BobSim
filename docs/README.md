@@ -11,6 +11,7 @@ Read in this order:
 | [architecture.md](architecture.md) | You need the `_0_` … `_5_` layer map and how data flows between them. Start here. |
 | [workflows.md](workflows.md) | You want to *run* something: app, standard studies, envelopes, sensitivities, tests. |
 | [doe-reverse-engineering.md](doe-reverse-engineering.md) | You are doing DOE work — sweeping parameters or going backwards from target performance metrics to a car. Start here for `make opt-standard`. |
+| [conventions.md](conventions.md) | You need the agreed vehicle geometry axes, signs, mirroring, and import datum rules. |
 | [boblib-submodule.md](boblib-submodule.md) | Modelica models are missing, builds fail with "file not found", or you touched BobLib. |
 
 ## Conventions used in these docs
