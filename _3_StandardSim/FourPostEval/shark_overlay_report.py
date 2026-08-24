@@ -617,8 +617,7 @@ def write_summary_md(
                 "",
                 "### Restored Modelica state",
                 "",
-                f"- records match baseline: `{restored['records_match_baseline']}` "
-                f"(state `{restored['state']}`, vehicle `{restored['vehicle_name']}`)",
+                f"- BobLib leftovers: `{restored['boblib_leftovers'] or 'none'}`",
                 f"- stamp present: `{restored['stamp_present']}`",
                 f"- executable present: `{restored['executable_present']}`",
             ]
@@ -788,36 +787,108 @@ def invalidate_build_artifacts() -> list[str]:
     return removed
 
 
+BOBLIB_PACKAGE = ROOT / "_0_Utils/external/BobLib/BobLib"
+
+# Everywhere the generator writes inside BobLib. Directories are snapshotted whole
+# so that files it *creates* are caught, not just ones it edits.
+BOBLIB_GENERATED_DIRS = (
+    "Records/VehicleDefn",
+    "Experiments/Standards/Templates/Vehicle",
+    "Experiments/Standards/Templates/FourPost",
+)
+BOBLIB_GENERATED_FILES = (
+    "Experiments/Standards/VehicleSim.mo",
+    "Experiments/Standards/FourPostSim.mo",
+)
+
+
+def _boblib_snapshot() -> dict[Path, bytes]:
+    snapshot: dict[Path, bytes] = {}
+    for area in BOBLIB_GENERATED_DIRS:
+        directory = BOBLIB_PACKAGE / area
+        if directory.is_dir():
+            for path in directory.rglob("*"):
+                if path.is_file():
+                    snapshot[path] = path.read_bytes()
+    for name in BOBLIB_GENERATED_FILES:
+        path = BOBLIB_PACKAGE / name
+        if path.is_file():
+            snapshot[path] = path.read_bytes()
+    return snapshot
+
+
+def restore_boblib(snapshot: dict[Path, bytes]) -> list[str]:
+    """Put BobLib back byte-for-byte, deleting anything the run created."""
+    touched: list[str] = []
+    for path, content in snapshot.items():
+        if not path.is_file() or path.read_bytes() != content:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+            touched.append(f"restored {path.name}")
+    for area in BOBLIB_GENERATED_DIRS:
+        directory = BOBLIB_PACKAGE / area
+        if not directory.is_dir():
+            continue
+        for path in directory.rglob("*"):
+            if path.is_file() and path not in snapshot:
+                path.unlink()
+                touched.append(f"removed {path.name}")
+    return touched
+
+
+def _files_not_in(snapshot: dict[Path, bytes]) -> list[Path]:
+    """Files present under the generated areas that the snapshot does not know."""
+    extra: list[Path] = []
+    for area in BOBLIB_GENERATED_DIRS:
+        directory = BOBLIB_PACKAGE / area
+        if not directory.is_dir():
+            continue
+        extra.extend(
+            path for path in directory.rglob("*") if path.is_file() and path not in snapshot
+        )
+    return extra
+
+
 @contextlib.contextmanager
-def orion_modelica_stack(baseline_path: Path) -> Iterator[None]:
-    """Leave the Modelica stack describing the baseline, whatever happened inside.
+def pristine_boblib() -> Iterator[dict[str, Any]]:
+    """Leave BobLib exactly as it was found, whatever happened inside.
 
-    A comparison writes the variant's records into BobLib. Without this the stack
-    is left describing the last car that ran, so the next unrelated build - a plain
-    `make standard-build`, the app, a teammate's run - silently compiles the
-    imported geometry while vehicle.yml says Orion.
+    BobLib is a black box: BobSim generates into it to build, but nothing of ours
+    belongs there afterwards. A comparison writes the variant's record, template
+    and experiment classes, and adds them to the package.order indexes - so
+    without this the library is left carrying a car it does not own, and the next
+    unrelated build can compile the imported geometry while vehicle.yml says Orion.
 
-    The restore runs in a finally, so it covers a raised StaleGeometryError, a
-    failed build, and a KeyboardInterrupt alike. Artifact invalidation is itself in
-    a finally so that a failure to regenerate still cannot leave a stamped binary
-    claiming to match.
+    Regenerating the baseline is not sufficient and was the earlier mistake: it
+    rewrites the records the baseline owns but leaves the variant's *created*
+    classes and their package.order entries in place. Restoring the snapshot byte
+    for byte is the only version of this with a checkable end state, namely that
+    the submodule is clean.
+
+    Runs in a finally, so it covers a raised StaleGeometryError, a failed build,
+    and a KeyboardInterrupt alike.
     """
+    snapshot = _boblib_snapshot()
+    # Yielded so the caller can report what actually happened. The check has to be
+    # made against the snapshot taken *before* the run; comparing the tree against
+    # a snapshot of itself afterwards is vacuously clean and proves nothing.
+    outcome: dict[str, Any] = {"restored": [], "leftovers": []}
     try:
-        yield
+        yield outcome
     finally:
         try:
-            generate_modelica_stack(baseline_path, root=ROOT)
+            outcome["restored"] = restore_boblib(snapshot)
         finally:
+            outcome["leftovers"] = [path.name for path in _files_not_in(snapshot)]
             invalidate_build_artifacts()
 
 
-def modelica_state_report(baseline_path: Path) -> dict[str, Any]:
-    """Describe the stack state, for post-run verification and for tests."""
-    status = modelica_stack_status_payload(baseline_path, ROOT)
+def modelica_state_report(outcome: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Describe the post-run state, for verification and for tests."""
+    outcome = outcome or {}
     return {
-        "records_match_baseline": status["state"] == "written",
-        "state": status["state"],
-        "vehicle_name": status["vehicle_name"],
+        "boblib_leftovers": list(outcome.get("leftovers", [])),
+        "boblib_restored": list(outcome.get("restored", [])),
         "stamp_present": GEOMETRY_STAMP.is_file(),
         "executable_present": four_post_executable() is not None,
     }
@@ -1247,19 +1318,19 @@ def main(argv: list[str] | None = None) -> int:
         runs: dict[str, Any] = {}
         failure: str | None = None
         # Whatever happens inside, BobLib is left describing the baseline again.
-        with orion_modelica_stack(baseline_path):
+        with pristine_boblib() as boblib_outcome:
             for label, path in ((BASELINE_LABEL, baseline_path), (VARIANT_LABEL, sim_variant_path)):
                 try:
                     runs[label] = run_four_post(path, label, skip_build=args.skip_build)
                 except StaleGeometryError as exc:
                     failure = str(exc)
                     break
-        restored = modelica_state_report(baseline_path)
+        restored = modelica_state_report(boblib_outcome)
         if failure is not None:
             print(f"REFUSING TO REPORT\n\n{failure}", file=sys.stderr)
             print(
-                "\nModelica state restored to the baseline: "
-                f"records_match_baseline={restored['records_match_baseline']} "
+                "\nBobLib restored to its pristine state: "
+                f"leftovers={restored['boblib_leftovers'] or 'none'} "
                 f"stamp_present={restored['stamp_present']} "
                 f"executable_present={restored['executable_present']}",
                 file=sys.stderr,

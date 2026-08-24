@@ -98,90 +98,117 @@ def _fake_build_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Pa
     return exe, stamp
 
 
+def _fake_boblib(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A BobLib package tree holding a checked-in record and its package.order."""
+    pkg = tmp_path / "BobLib"
+    records = pkg / "Records/VehicleDefn"
+    records.mkdir(parents=True)
+    (records / "OrionRecord.mo").write_text("record Orion end Orion;\n", encoding="utf-8")
+    (records / "package.order").write_text("OrionRecord\n", encoding="utf-8")
+    (pkg / "Experiments/Standards").mkdir(parents=True)
+    (pkg / "Experiments/Standards/FourPostSim.mo").write_text("model FP;\n", encoding="utf-8")
+    monkeypatch.setattr(sor, "BOBLIB_PACKAGE", pkg)
+    return pkg
+
+
+def _dirty_boblib(pkg: Path) -> None:
+    """Do to BobLib what a real comparison does: edit, create, and re-index."""
+    records = pkg / "Records/VehicleDefn"
+    (records / "OrionRecord.mo").write_text("record Orion REFORMATTED end Orion;\n", encoding="utf-8")
+    (records / "Generated_2027Record.mo").write_text("record G2027 end G2027;\n", encoding="utf-8")
+    (records / "package.order").write_text("OrionRecord\nGenerated_2027Record\n", encoding="utf-8")
+    (pkg / "Experiments/Standards/FourPostSim.mo").write_text("model FP variant;\n", encoding="utf-8")
+
+
 @pytest.mark.parametrize("boom", [None, RuntimeError, KeyboardInterrupt])
-def test_modelica_stack_is_restored_to_the_baseline_however_the_run_ends(
+def test_boblib_is_left_pristine_however_the_run_ends(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boom: type[BaseException] | None
 ) -> None:
-    """A comparison must never leave BobLib describing the variant.
+    """BobLib is a black box: nothing of ours may survive a comparison.
 
-    Covers the clean path, a raised error, and an interrupt, because the failure
-    mode is identical in all three: the next unrelated build would silently compile
-    the imported geometry while vehicle.yml says Orion.
+    Covers the clean path, a raised error and an interrupt, because the failure
+    mode is identical in all three. Regenerating the baseline was not enough - it
+    rewrites what the baseline owns but leaves the variant's created classes and
+    their package.order entries behind, which is how the library ends up carrying
+    a car it does not own.
     """
+    pkg = _fake_boblib(tmp_path, monkeypatch)
     exe, stamp = _fake_build_dir(tmp_path, monkeypatch)
-    regenerated: list[Path] = []
-    monkeypatch.setattr(
-        sor, "generate_modelica_stack",
-        lambda path, root=None: regenerated.append(Path(path)),
-    )
-    baseline = tmp_path / "vehicle.yml"
-    baseline.write_text("front: {}\n", encoding="utf-8")
+    before = {p: p.read_bytes() for p in pkg.rglob("*") if p.is_file()}
 
     if boom is None:
-        with sor.orion_modelica_stack(baseline):
-            pass
+        with sor.pristine_boblib():
+            _dirty_boblib(pkg)
     else:
         with pytest.raises(boom):
-            with sor.orion_modelica_stack(baseline):
+            with sor.pristine_boblib():
+                _dirty_boblib(pkg)
                 raise boom()
 
-    assert regenerated == [baseline], "records must be regenerated from the baseline"
-    assert not stamp.exists(), "a stamp asserting the variant build must not survive"
-    assert not exe.exists(), "the variant binary must not survive to be reused"
+    after = {p: p.read_bytes() for p in pkg.rglob("*") if p.is_file()}
+    assert after == before, "BobLib must be byte-identical to how it was found"
+    assert not (pkg / "Records/VehicleDefn/Generated_2027Record.mo").exists()
+    assert b"Generated_2027" not in (pkg / "Records/VehicleDefn/package.order").read_bytes()
+    assert not stamp.exists() and not exe.exists()
 
 
-def test_restoration_invalidates_artifacts_even_if_regeneration_fails(
+def test_artifacts_are_invalidated_even_if_the_boblib_restore_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A failed regenerate must not leave a stamped binary claiming to match."""
+    """A failed restore must not leave a stamped binary claiming to match."""
+    _fake_boblib(tmp_path, monkeypatch)
     exe, stamp = _fake_build_dir(tmp_path, monkeypatch)
 
-    def explode(path: Any, root: Any = None) -> None:
-        raise RuntimeError("generator failed")
+    def explode(snapshot: Any) -> None:
+        raise RuntimeError("restore failed")
 
-    monkeypatch.setattr(sor, "generate_modelica_stack", explode)
-    baseline = tmp_path / "vehicle.yml"
-    baseline.write_text("front: {}\n", encoding="utf-8")
-
-    with pytest.raises(RuntimeError, match="generator failed"):
-        with sor.orion_modelica_stack(baseline):
+    monkeypatch.setattr(sor, "restore_boblib", explode)
+    with pytest.raises(RuntimeError, match="restore failed"):
+        with sor.pristine_boblib():
             pass
 
     assert not stamp.exists()
     assert not exe.exists()
 
 
-def test_modelica_state_report_describes_the_restored_stack(
+def test_leftovers_are_judged_against_the_pre_run_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    exe, stamp = _fake_build_dir(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        sor, "modelica_stack_status_payload",
-        lambda vehicle_path, root: {"state": "written", "vehicle_name": "Orion"},
-    )
-    report = sor.modelica_state_report(tmp_path / "vehicle.yml")
-    assert report == {
-        "records_match_baseline": True,
-        "state": "written",
-        "vehicle_name": "Orion",
-        "stamp_present": True,
-        "executable_present": True,
-    }
-    sor.invalidate_build_artifacts()
-    after = sor.modelica_state_report(tmp_path / "vehicle.yml")
-    assert after["stamp_present"] is False and after["executable_present"] is False
+    """The check must compare against the tree as it was *before* the run.
+
+    Comparing the tree against a snapshot of itself afterwards is vacuously clean:
+    it reports no leftovers no matter what the run created. That is how a report
+    can claim success while Generated_2027Record.mo is still sitting in the library.
+    """
+    pkg = _fake_boblib(tmp_path, monkeypatch)
+    _fake_build_dir(tmp_path, monkeypatch)
+
+    with sor.pristine_boblib() as outcome:
+        _dirty_boblib(pkg)
+    report = sor.modelica_state_report(outcome)
+    assert report["boblib_leftovers"] == [], "restore removed what the run created"
+    assert report["boblib_restored"], "and it reports the files it had to put back"
+    assert report["stamp_present"] is False and report["executable_present"] is False
+
+    # If the restore is defeated, the leftover must actually be named.
+    monkeypatch.setattr(sor, "restore_boblib", lambda snapshot: [])
+    with sor.pristine_boblib() as escaped:
+        _dirty_boblib(pkg)
+    assert "Generated_2027Record.mo" in sor.modelica_state_report(escaped)["boblib_leftovers"]
 
 
-def test_post_run_state_is_consistent_across_yaml_records_and_binary(
+def test_post_run_state_is_consistent_across_yaml_boblib_and_binary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """After a comparison, all three must agree that the car is the baseline.
 
-    The three can drift apart independently - the YAML is restored by one context
-    manager, the records by another, and the binary is just a file left on disk -
-    so the regression asserts them together rather than one at a time.
+    The three are restored by separate mechanisms - the YAML by one context
+    manager, BobLib by another, and the binary is just a file left on disk - so
+    the regression asserts them together rather than one at a time.
     """
+    pkg = _fake_boblib(tmp_path, monkeypatch)
     exe, stamp = _fake_build_dir(tmp_path, monkeypatch)
+    before = {p: p.read_bytes() for p in pkg.rglob("*") if p.is_file()}
 
     baseline = tmp_path / "vehicle.yml"
     baseline.write_text("name: orion\n", encoding="utf-8")
@@ -189,25 +216,22 @@ def test_post_run_state_is_consistent_across_yaml_records_and_binary(
     variant.write_text("name: variant\n", encoding="utf-8")
     monkeypatch.setattr(sor, "VEHICLE_YAML", baseline)
 
-    regenerated: list[Path] = []
-    monkeypatch.setattr(
-        sor, "generate_modelica_stack",
-        lambda path, root=None: regenerated.append(Path(path)),
-    )
-    # The variant run fails after the swap, which is the path that used to leave
-    # BobLib describing the imported car.
-    monkeypatch.setattr(
-        sor, "four_post_signature",
-        lambda path: (_ for _ in ()).throw(sor.StaleGeometryError("build failed")),
-    )
+    # The variant run dirties BobLib and then fails, which is the path that used
+    # to leave the library carrying the imported car.
+    def generate_then_fail(path: Any) -> None:
+        _dirty_boblib(pkg)
+        raise sor.StaleGeometryError("build failed")
 
-    with sor.orion_modelica_stack(baseline):
+    monkeypatch.setattr(sor, "four_post_signature", generate_then_fail)
+
+    with sor.pristine_boblib():
         with pytest.raises(sor.StaleGeometryError):
             sor.run_four_post(variant, sor.VARIANT_LABEL, skip_build=False)
 
     assert baseline.read_text(encoding="utf-8") == "name: orion\n", "YAML restored"
     assert not baseline.with_suffix(".yml.overlay-backup").exists(), "no leftover backup"
-    assert regenerated == [baseline], "records regenerated from the baseline"
+    after = {p: p.read_bytes() for p in pkg.rglob("*") if p.is_file()}
+    assert after == before, "BobLib restored byte-for-byte"
     assert not stamp.exists() and not exe.exists(), "variant build artifacts invalidated"
 
 
