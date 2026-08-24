@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -534,34 +535,116 @@ def import_shark(
     return merged, report
 
 
+DATUM_SCHEMA = "bobsim.shark.datum.v2"
+
+
 def datum_sidecar_path(vehicle_path: str | Path) -> Path:
     """Path of the datum record that travels with an imported vehicle file."""
     path = Path(vehicle_path)
     return path.with_name(f"{path.stem}.datum.json")
 
 
-def write_datum_sidecar(vehicle_path: str | Path, datum: dict[str, Any]) -> Path:
-    """Persist the datum assessment beside the imported vehicle.
+def geometry_digest(vehicle: dict[str, Any], axle: str) -> str:
+    """Deterministic digest of the geometry an axle's datum verdict describes.
 
-    Kept out of the vehicle mapping itself so the file stays valid against
-    `boblib.vehicle.v1` and the Modelica generator never sees an unexpected key.
-    A sidecar rather than a comment because YAML round-tripping drops comments,
-    and this caveat has to survive a run that does not re-import.
+    Covers exactly the inputs `CornerKinematics.from_vehicle` reads - suspension
+    hardpoints, the steering rack pickup and the wheel - so any edit that could
+    change a gated curve also changes the digest. Actuation is excluded because it
+    takes no part in the kinematic solve and carries no vertical datum meaning.
+
+    Binding the verdict to this digest is what stops a hand-edit, such as nudging
+    the wheel-centre z to probe the datum question, from leaving a stale record
+    that vouches for geometry which no longer exists.
     """
-    path = datum_sidecar_path(vehicle_path)
-    path.write_text(json.dumps(datum, indent=2, sort_keys=True), encoding="utf-8")
-    return path
+    side = vehicle.get(axle) or {}
+    material = {
+        "suspension": side.get("suspension"),
+        "rack_pickup_m": (side.get("steering") or {}).get("rack_pickup_m"),
+        "wheel": side.get("wheel"),
+    }
+    blob = json.dumps(material, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def read_datum_status(vehicle_path: str | Path) -> str | None:
-    """Return the recorded datum status for an imported vehicle, if any."""
+def read_datum_sidecar(vehicle_path: str | Path) -> dict[str, Any] | None:
     path = datum_sidecar_path(vehicle_path)
     if not path.is_file():
         return None
     try:
-        return str(json.loads(path.read_text(encoding="utf-8")).get("status"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+    return payload if isinstance(payload, dict) else None
+
+
+def write_datum_sidecar(
+    vehicle_path: str | Path, axle: str, datum: dict[str, Any], vehicle: dict[str, Any]
+) -> Path:
+    """Record one axle's datum verdict, merging into any existing record.
+
+    Merging rather than overwriting is what lets a later front import land beside
+    the rear verdict instead of erasing it. Each axle carries its own digest, so
+    the two are independently verifiable.
+
+    Kept out of the vehicle mapping so the file stays valid against
+    `boblib.vehicle.v1` and the Modelica generator never sees an unexpected key.
+    """
+    payload = read_datum_sidecar(vehicle_path) or {}
+    axles = payload.get("axles")
+    if not isinstance(axles, dict):
+        axles = {}
+    axles[axle] = {**datum, "geometry_digest": geometry_digest(vehicle, axle)}
+    merged = {"schema": DATUM_SCHEMA, "axles": axles}
+    path = datum_sidecar_path(vehicle_path)
+    path.write_text(json.dumps(merged, indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def datum_gate(vehicle_path: str | Path, vehicle: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Decide whether z-dependent output may be published for this vehicle.
+
+    Fails closed. The verdict is `valid` only when a record exists, every axle it
+    describes is resolved, and every digest still matches the file on disk. Missing,
+    unresolved and stale all read the same way: we cannot vouch for the datum, so
+    the z-dependent outputs stay withheld.
+    """
+    path = Path(vehicle_path)
+    payload = read_datum_sidecar(path)
+    if payload is None:
+        return {
+            "valid": False,
+            "reason": f"No datum record beside {path.name}.",
+            "axles": {},
+        }
+
+    if vehicle is None:
+        vehicle = load_yaml(path)
+    axles = payload.get("axles")
+    if not isinstance(axles, dict) or not axles:
+        return {"valid": False, "reason": f"{datum_sidecar_path(path).name} records no axles.", "axles": {}}
+
+    detail: dict[str, Any] = {}
+    problems: list[str] = []
+    for axle, record in sorted(axles.items()):
+        if not isinstance(record, dict):
+            problems.append(f"{axle}: malformed record")
+            continue
+        status = str(record.get("status", "missing"))
+        recorded = str(record.get("geometry_digest", ""))
+        actual = geometry_digest(vehicle, axle)
+        stale = recorded != actual
+        detail[axle] = {"status": status, "digest_matches": not stale}
+        if stale:
+            problems.append(
+                f"{axle}: geometry digest mismatch - the {axle} geometry changed since the "
+                "datum was assessed, so the recorded verdict describes a different car"
+            )
+        elif status != "shared_ground_plane":
+            problems.append(f"{axle}: datum {status}")
+
+    if problems:
+        return {"valid": False, "reason": "; ".join(problems), "axles": detail}
+    return {"valid": True, "reason": "every imported axle has a resolved, current datum", "axles": detail}
 
 
 def write_vehicle(vehicle: dict[str, Any], path: str | Path) -> Path:
@@ -604,7 +687,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         vehicle_name=args.name,
     )
     out = write_vehicle(merged, args.output)
-    write_datum_sidecar(out, report["datum"])
+    write_datum_sidecar(out, report["axle"], report["datum"], merged)
 
     print(f"Imported {report['point_count']} points from {args.shark}")
     print(f"  template : {report['template']}")

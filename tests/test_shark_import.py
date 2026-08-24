@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
 import pytest
@@ -246,17 +247,135 @@ def test_kinematic_solve_ignores_actuation_entirely() -> None:
     assert with_actuation["curves"] == without["curves"]
 
 
-def test_datum_sidecar_round_trips(tmp_path: Path) -> None:
-    """The datum caveat must survive a later run that does not re-import."""
-    from _0_Utils.shark_import import read_datum_status, write_datum_sidecar, write_vehicle
+def _write_variant(tmp_path: Path, vehicle: dict, name: str = "variant.yml") -> Path:
+    from _0_Utils.shark_import import write_vehicle
+
+    target = tmp_path / name
+    write_vehicle(vehicle, target)
+    return target
+
+
+def _resolve(vehicle: dict, axle: str) -> dict:
+    """A datum record that a gate should accept for `axle`."""
+    return {"status": "shared_ground_plane", "dz_mm": 0.0}
+
+
+def test_datum_gate_is_closed_when_no_record_exists(tmp_path: Path) -> None:
+    """Missing metadata is unknown, not agreement."""
+    from _0_Utils.shark_import import datum_gate
+
+    merged, _ = import_shark(SHARK_FIXTURE)
+    target = _write_variant(tmp_path, merged)
+    gate = datum_gate(target)
+    assert gate["valid"] is False
+    assert "No datum record" in gate["reason"]
+
+
+def test_datum_gate_is_closed_while_any_imported_axle_is_unresolved(tmp_path: Path) -> None:
+    from _0_Utils.shark_import import datum_gate, write_datum_sidecar
 
     merged, report = import_shark(SHARK_FIXTURE)
-    target = tmp_path / "vehicle_variant.yml"
-    write_vehicle(merged, target)
-    write_datum_sidecar(target, report["datum"])
-    assert read_datum_status(target) == "unresolved"
-    # A vehicle with no sidecar carries no claim either way.
-    assert read_datum_status(tmp_path / "absent.yml") is None
+    target = _write_variant(tmp_path, merged)
+    write_datum_sidecar(target, "rear", report["datum"], merged)
+
+    gate = datum_gate(target)
+    assert gate["valid"] is False
+    assert gate["axles"]["rear"]["status"] == "unresolved"
+    assert gate["axles"]["rear"]["digest_matches"] is True
+
+
+def test_rear_then_front_import_keeps_both_axle_verdicts(tmp_path: Path) -> None:
+    """A second axle must merge beside the first, not erase it."""
+    from _0_Utils.shark_import import datum_gate, read_datum_sidecar, write_datum_sidecar
+
+    merged, report = import_shark(SHARK_FIXTURE)
+    target = _write_variant(tmp_path, merged)
+
+    write_datum_sidecar(target, "rear", report["datum"], merged)
+    write_datum_sidecar(target, "front", _resolve(merged, "front"), merged)
+
+    axles = (read_datum_sidecar(target) or {})["axles"]
+    assert set(axles) == {"front", "rear"}
+    # Front resolved, rear not: a mixture must still close the gate.
+    gate = datum_gate(target)
+    assert gate["valid"] is False
+    assert gate["axles"]["front"]["status"] == "shared_ground_plane"
+    assert gate["axles"]["rear"]["status"] == "unresolved"
+
+
+def test_front_then_rear_import_reaches_the_same_state(tmp_path: Path) -> None:
+    """Import order must not change the recorded verdicts."""
+    from _0_Utils.shark_import import read_datum_sidecar, write_datum_sidecar
+
+    merged, report = import_shark(SHARK_FIXTURE)
+    first = _write_variant(tmp_path, merged, "a.yml")
+    second = _write_variant(tmp_path, merged, "b.yml")
+
+    write_datum_sidecar(first, "rear", report["datum"], merged)
+    write_datum_sidecar(first, "front", _resolve(merged, "front"), merged)
+
+    write_datum_sidecar(second, "front", _resolve(merged, "front"), merged)
+    write_datum_sidecar(second, "rear", report["datum"], merged)
+
+    assert (read_datum_sidecar(first) or {})["axles"] == (read_datum_sidecar(second) or {})["axles"]
+
+
+def test_datum_gate_opens_only_when_every_axle_is_resolved(tmp_path: Path) -> None:
+    from _0_Utils.shark_import import datum_gate, write_datum_sidecar
+
+    merged, _ = import_shark(SHARK_FIXTURE)
+    target = _write_variant(tmp_path, merged)
+    write_datum_sidecar(target, "rear", _resolve(merged, "rear"), merged)
+    write_datum_sidecar(target, "front", _resolve(merged, "front"), merged)
+
+    gate = datum_gate(target)
+    assert gate["valid"] is True
+
+
+def test_editing_the_geometry_invalidates_the_datum_record(tmp_path: Path) -> None:
+    """A hand-edit must not inherit a verdict passed on different geometry.
+
+    Nudging the wheel-centre z is the plausible edit here, because that is exactly
+    the quantity the datum question is about.
+    """
+    from _0_Utils.shark_import import datum_gate, write_datum_sidecar, write_vehicle
+
+    merged, _ = import_shark(SHARK_FIXTURE)
+    target = _write_variant(tmp_path, merged)
+    write_datum_sidecar(target, "rear", _resolve(merged, "rear"), merged)
+    write_datum_sidecar(target, "front", _resolve(merged, "front"), merged)
+    assert datum_gate(target)["valid"] is True
+
+    edited = copy.deepcopy(merged)
+    edited["rear"]["suspension"]["wheel_center_m"][2] += 0.001
+    write_vehicle(edited, target)
+
+    gate = datum_gate(target)
+    assert gate["valid"] is False
+    assert "digest mismatch" in gate["reason"]
+    assert gate["axles"]["rear"]["digest_matches"] is False
+    # The untouched axle is still vouched for; only the edited one goes stale.
+    assert gate["axles"]["front"]["digest_matches"] is True
+
+
+def test_digest_ignores_actuation_which_the_datum_does_not_describe(tmp_path: Path) -> None:
+    """Editing a spring rate must not invalidate a geometry datum verdict."""
+    from _0_Utils.shark_import import geometry_digest
+
+    merged, _ = import_shark(SHARK_FIXTURE)
+    before = geometry_digest(merged, "rear")
+    tweaked = copy.deepcopy(merged)
+    tweaked["rear"]["actuation"]["shock"]["free_length_m"] = 0.3
+    assert geometry_digest(tweaked, "rear") == before
+
+
+def test_malformed_sidecar_closes_the_gate(tmp_path: Path) -> None:
+    from _0_Utils.shark_import import datum_gate, datum_sidecar_path
+
+    merged, _ = import_shark(SHARK_FIXTURE)
+    target = _write_variant(tmp_path, merged)
+    datum_sidecar_path(target).write_text("{not json", encoding="utf-8")
+    assert datum_gate(target)["valid"] is False
 
 
 def test_missing_required_points_fail_loudly() -> None:

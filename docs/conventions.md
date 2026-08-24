@@ -88,3 +88,28 @@ overlay withholds every z-dependent curve — roll-centre height, migration, abs
 RC and IC z, and front-view swing arm. Angles and lengths are unaffected: a rigid
 vertical translation of a corner changes neither, which is why the rest of the deck
 still publishes.
+
+### The datum gate
+
+The verdict is recorded **per axle** in a `<vehicle>.datum.json` sidecar, so a rear
+import and a later front import each carry their own, and merging one does not erase
+the other. Each record is bound to a `geometry_digest`: a SHA-256 over exactly the
+inputs `CornerKinematics.from_vehicle` reads — suspension hardpoints, the steering
+rack pickup and the wheel. Actuation is excluded, because it takes no part in the
+kinematic solve and carries no vertical-datum meaning.
+
+`datum_gate()` fails closed. Z-dependent output is published only when **all** hold:
+
+| Condition | Otherwise |
+| --- | --- |
+| A sidecar exists | missing → withhold |
+| Every recorded axle is `shared_ground_plane` | any `unresolved` → withhold |
+| Every recorded digest matches the file on disk | edited → withhold |
+
+The digest is what stops a hand-edit from inheriting someone else's verdict. Nudging
+`wheel_center_m` z to probe the datum question is a plausible thing to do, and without
+the digest the stale record would keep vouching for geometry that no longer exists.
+
+The gate covers the **four-post jacking metrics too**, not just the kinematic curves.
+Anti-dive, anti-squat and geometric anti-roll are all measured against the contact
+patch, so they move with the datum exactly as roll-centre height does.
