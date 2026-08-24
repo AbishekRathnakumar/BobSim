@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -31,13 +33,13 @@ import numpy as np
 import yaml
 
 from _0_Utils.shark_import import (
-    Z_DATUM_UNRESOLVED_WARNING,
     Z_DEPENDENT_CURVE_IDS,
+    datum_gate,
     import_shark,
-    read_datum_status,
     write_datum_sidecar,
     write_vehicle,
 )
+from _0_Utils.kin_py.kinematics import DEFAULT_ROLL_DEG, DEFAULT_SWEEP_M
 from _5_App.kinematics import KINEMATIC_CURVE_META, kinematic_curves_payload
 from _5_App.modelica_generator import generate_modelica_stack, modelica_stack_status_payload
 
@@ -62,11 +64,45 @@ GRID = "#e4e4e1"
 SURFACE = "#fcfcfb"
 WARN = "#a8341a"
 
-# A curve reaches the headline page if it moves by at least this fraction of the
-# baseline curve's own range. Relative rather than absolute because the deck mixes
-# degrees and millimetres, which have no common scale.
-MEANINGFUL_RELATIVE_DELTA = 0.02
+# How much a curve must move before it is worth an engineer's attention, in the
+# curve's own units. Ranking on delta-over-baseline-range alone is unusable on a
+# rear axle, where caster and trail are nearly flat and a change of a hundredth of
+# a degree scores higher than a real camber change. These are the defaults; both
+# are overridable so a team can rank against its own build tolerances.
+DEFAULT_TOLERANCES = {"deg": 0.05, "mm": 0.5}
 HEADLINE_PANEL_LIMIT = 8
+
+# Rear "caster" is the registry's label for a steering-axis angle that no rear
+# corner steers about. Renaming it in the report avoids implying the rear wheels
+# are steered, without touching the shared registry the app also reads.
+REAR_RELABEL = {
+    "caster": "Kingpin side-view inclination",
+}
+
+
+def display_label(meta: dict[str, str], axle: str) -> str:
+    """Curve label as shown to a reader, corrected for the axle it describes."""
+    if axle != "rear":
+        return meta["label"]
+    for token, replacement in REAR_RELABEL.items():
+        if token in meta["id"]:
+            prefix = "Bump" if meta["id"].startswith("bump") else "Roll"
+            return f"{prefix} {replacement}"
+    return meta["label"]
+
+
+def display_y_label(meta: dict[str, str], axle: str) -> str:
+    """Axis label, relabelled on the same terms as the curve title.
+
+    Kept in step with `display_label` deliberately: a plot titled "Kingpin side-view
+    inclination" with a y axis reading "Caster" is worse than not renaming at all.
+    """
+    if axle != "rear":
+        return meta["y_label"]
+    for token, replacement in REAR_RELABEL.items():
+        if token in meta["id"]:
+            return replacement
+    return meta["y_label"]
 
 
 class StaleGeometryError(RuntimeError):
@@ -78,14 +114,38 @@ class StaleGeometryError(RuntimeError):
 # --------------------------------------------------------------------------
 
 
-def kinematic_payload(vehicle_path: Path) -> dict[str, Any]:
-    """Solve the full registry curve deck at the app's default sweep ranges.
+def sweep_including_zero(reference: Sequence[float], points: int = 21) -> tuple[float, ...]:
+    """Rebuild a sweep over the same range with the design position on a grid point.
 
-    Sweep and roll ranges are deliberately left to `kinematic_curves_payload`
-    defaults so this output is directly comparable to anything the app renders.
+    The app defaults span the range in an even number of steps, so zero falls
+    between samples: the bump grid's nearest point is 2.1 mm of jounce. Any
+    "value at design position" taken from that grid is an extrapolation, which is
+    the one number a suspension engineer is most likely to read off directly. An
+    odd count puts the midpoint exactly on zero, and it is snapped to a hard 0.0 so
+    float accumulation cannot leave it at 1e-18.
+    """
+    low, high = min(reference), max(reference)
+    if points % 2 == 0:
+        points += 1
+    step = (high - low) / (points - 1)
+    values = [low + step * index for index in range(points)]
+    values[points // 2] = 0.0
+    return tuple(values)
+
+
+BUMP_SWEEP_M = sweep_including_zero(DEFAULT_SWEEP_M)
+ROLL_SWEEP_DEG = sweep_including_zero(DEFAULT_ROLL_DEG)
+
+
+def kinematic_payload(vehicle_path: Path) -> dict[str, Any]:
+    """Solve the full registry curve deck over the app's ranges, sampling zero.
+
+    Ranges match the app registry defaults so the curves stay comparable to the
+    app's kinematics view; only the point count differs, to put the design
+    position on a sample rather than between two.
     """
     vehicle = yaml.safe_load(vehicle_path.read_text(encoding="utf-8"))
-    return kinematic_curves_payload(vehicle)
+    return kinematic_curves_payload(vehicle, BUMP_SWEEP_M, ROLL_SWEEP_DEG)
 
 
 def _curve_series(
@@ -99,6 +159,28 @@ def _curve_series(
         return None
     size = min(len(x), len(values))
     return list(x[:size]), list(values[:size])
+
+
+def _at_design_position(x: Sequence[float], y: Sequence[float | None]) -> float:
+    """Value where the sweep passes through zero, read off rather than fitted."""
+    for index, value in enumerate(x):
+        if value == 0.0 and index < len(y) and y[index] is not None:
+            return float(y[index])  # type: ignore[arg-type]
+    return float("nan")
+
+
+def _working_slope(x: Sequence[float], y: Sequence[float | None]) -> float:
+    """Least-squares gradient over the whole swept range, in curve units per x unit."""
+    pairs = [(a, b) for a, b in zip(x, y) if b is not None]
+    if len(pairs) < 2:
+        return float("nan")
+    xs = np.asarray([a for a, _ in pairs], dtype=float)
+    ys = np.asarray([b for _, b in pairs], dtype=float)
+    mask = np.isfinite(xs) & np.isfinite(ys)
+    if mask.sum() < 2:
+        return float("nan")
+    slope, _intercept = np.polyfit(xs[mask], ys[mask], 1)
+    return float(slope)
 
 
 def _delta_score(
@@ -127,14 +209,21 @@ def _delta_score(
     return {"peak": peak, "span": span, "ratio": ratio}
 
 
-def rank_curves(
-    payloads: dict[str, dict[str, Any]], withheld: frozenset[str]
-) -> list[tuple[dict[str, str], str, dict[str, float]]]:
-    """Rank (curve, axle) pairs by how much the import moved them."""
-    ranked: list[tuple[dict[str, str], str, dict[str, float]]] = []
+def curve_metrics(
+    payloads: dict[str, dict[str, Any]],
+    withheld: frozenset[str],
+    tolerances: dict[str, float],
+) -> list[dict[str, Any]]:
+    """Per (curve, axle): design-position values, working slopes, and significance.
+
+    Significance is `peak delta / engineering tolerance` - how many times the
+    change exceeds what the team calls negligible in that unit. That is a
+    judgement an engineer can argue with, unlike delta-over-baseline-range, which
+    reports a flat rear caster curve moving by a hundredth of a degree as a larger
+    finding than a real camber change.
+    """
+    rows: list[dict[str, Any]] = []
     for meta in KINEMATIC_CURVE_META:
-        if meta["id"] in withheld:
-            continue
         for axle in ("front", "rear"):
             base = _curve_series(payloads[BASELINE_LABEL], axle, meta)
             var = _curve_series(payloads[VARIANT_LABEL], axle, meta)
@@ -143,9 +232,29 @@ def rank_curves(
             score = _delta_score(base[1], var[1])
             if score is None:
                 continue
-            ranked.append((meta, axle, score))
-    ranked.sort(key=lambda item: item[2]["ratio"], reverse=True)
-    return ranked
+            tol = tolerances.get(meta["unit"], 0.0)
+            base_design = _at_design_position(base[0], base[1])
+            var_design = _at_design_position(var[0], var[1])
+            rows.append({
+                "meta": meta,
+                "axle": axle,
+                "label": display_label(meta, axle),
+                "unit": meta["unit"],
+                "x_unit": meta["x_unit"],
+                "withheld": meta["id"] in withheld,
+                "baseline_design": base_design,
+                "variant_design": var_design,
+                "design_delta": var_design - base_design,
+                "baseline_slope": _working_slope(base[0], base[1]),
+                "variant_slope": _working_slope(var[0], var[1]),
+                "peak": score["peak"],
+                "span": score["span"],
+                "ratio": score["ratio"],
+                "tolerance": tol,
+                "significance": (score["peak"] / tol) if tol > 0 else float("inf"),
+            })
+    rows.sort(key=lambda row: (row["withheld"], -row["significance"]))
+    return rows
 
 
 # --------------------------------------------------------------------------
@@ -201,8 +310,8 @@ def _plot_curve(
     _style_axis(
         ax,
         f"{meta['x_label']} ({meta['x_unit']})",
-        f"{meta['y_label']} ({meta['unit']})",
-        f"{axle.title()} - {meta['label']}",
+        f"{display_y_label(meta, axle)} ({meta['unit']})",
+        f"{axle.title()} - {display_label(meta, axle)}",
     )
     if identical:
         ax.text(
@@ -255,13 +364,68 @@ def _grid_page(
     plt.close(fig)
 
 
+def _table_page(
+    pdf: Any,
+    title: str,
+    headers: Sequence[str],
+    rows: Sequence[Sequence[str]],
+    *,
+    subtitle: str = "",
+    col_widths: Sequence[float] | None = None,
+) -> None:
+    """Render a real table: ruled header, aligned columns, zebra striping."""
+    import matplotlib.pyplot as plt
+
+    fig = plt.figure(figsize=(11.0, 8.5), facecolor=SURFACE)
+    fig.text(0.04, 0.95, title, fontsize=14, color=INK, va="top", ha="left")
+    if subtitle:
+        fig.text(0.04, 0.905, subtitle, fontsize=8, color=MUTED, va="top", ha="left")
+
+    ax = fig.add_axes((0.04, 0.05, 0.92, 0.82))
+    ax.axis("off")
+    table = ax.table(
+        cellText=[list(row) for row in rows] or [["-"] * len(headers)],
+        colLabels=list(headers),
+        colWidths=list(col_widths) if col_widths else None,
+        cellLoc="right",
+        loc="upper center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(7)
+    table.scale(1.0, 1.25)
+
+    for (row, col), cell in table.get_celld().items():
+        cell.set_edgecolor(GRID)
+        cell.set_linewidth(0.6)
+        if row == 0:
+            cell.set_facecolor(GRID)
+            cell.set_text_props(color=INK, fontweight="bold")
+            cell.set_height(cell.get_height() * 1.1)
+        else:
+            cell.set_facecolor(SURFACE if row % 2 else "#f4f4f1")
+            cell.set_text_props(color=INK)
+        if col == 0:
+            cell.set_text_props(ha="left")
+            cell.get_text().set_x(0.02)
+
+    pdf.savefig(fig, facecolor=SURFACE)
+    plt.close(fig)
+
+
+def _fmt(value: float, unit: str = "", places: int = 3) -> str:
+    if value is None or not np.isfinite(value):
+        return "n/a"
+    return f"{value:.{places}f}{(' ' + unit) if unit else ''}"
+
+
 def build_report(
     payloads: dict[str, dict[str, Any]],
     notes: Sequence[str],
     withheld: frozenset[str],
-    ranked: Sequence[tuple[dict[str, str], str, dict[str, float]]],
+    metrics: Sequence[dict[str, Any]],
     four_post: dict[str, Any] | None,
     out_path: Path,
+    tolerances: dict[str, float],
 ) -> Path:
     import matplotlib
     matplotlib.use("Agg")
@@ -269,35 +433,77 @@ def build_report(
     from matplotlib.backends.backend_pdf import PdfPages
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    publishable = [row for row in metrics if not row["withheld"]]
     headline = [
-        (meta, axle)
-        for meta, axle, score in ranked
-        if score["ratio"] >= MEANINGFUL_RELATIVE_DELTA
+        (row["meta"], row["axle"]) for row in publishable if row["significance"] >= 1.0
     ][:HEADLINE_PANEL_LIMIT]
+
+    tol_text = ", ".join(f"{unit}: {value:g}" for unit, value in sorted(tolerances.items()))
 
     with PdfPages(out_path) as pdf:
         cover = [f"{BASELINE_LABEL} (vehicle.yml) vs {VARIANT_LABEL} kinematic curves.", ""]
         cover += [f"- {note}" for note in notes]
+        cover += [
+            "",
+            f"Engineering tolerances used for ranking - {tol_text}.",
+            "A curve is called significant when its peak change exceeds one tolerance.",
+            "",
+            "Design position (zero) is an explicit sample point in both sweeps: "
+            f"bump {len(BUMP_SWEEP_M)} points over "
+            f"{min(BUMP_SWEEP_M) * 1000.0:+.0f}..{max(BUMP_SWEEP_M) * 1000.0:+.0f} mm, "
+            f"roll {len(ROLL_SWEEP_DEG)} points over "
+            f"{min(ROLL_SWEEP_DEG):+.2f}..{max(ROLL_SWEEP_DEG):+.2f} deg.",
+        ]
         if withheld:
-            cover += ["", Z_DATUM_UNRESOLVED_WARNING, "", "Withheld curves:"]
+            cover += ["", "DATUM GATE CLOSED - the following curves are withheld:"]
             cover += [f"  - {curve_id}" for curve_id in sorted(withheld)]
         _text_page(pdf, "SHARK import overlay", cover, warn=bool(withheld))
 
-        if headline:
-            _grid_page(
-                pdf, headline[:6], payloads,
-                "Headline - curves with a meaningful Orion vs 2027 delta",
+        # Summary table: design-position values and working-range slopes. Paginated
+        # because 26 curves across two axles is 52 rows, which does not fit a page.
+        summary_rows = [
+            (
+                row["label"], row["axle"],
+                _fmt(row["baseline_design"], row["unit"]),
+                _fmt(row["variant_design"], row["unit"]),
+                _fmt(row["design_delta"], row["unit"]),
+                _fmt(row["baseline_slope"]) + f" /{row['x_unit']}",
+                _fmt(row["variant_slope"]) + f" /{row['x_unit']}",
+                _fmt(row["peak"], row["unit"]),
+                "withheld" if row["withheld"] else _fmt(row["significance"], places=1),
             )
-            if len(headline) > 6:
+            for row in metrics
+        ]
+        per_page = 26
+        pages = max(1, (len(summary_rows) + per_page - 1) // per_page)
+        for index in range(pages):
+            chunk = summary_rows[index * per_page:(index + 1) * per_page]
+            suffix = f" ({index + 1}/{pages})" if pages > 1 else ""
+            _table_page(
+                pdf,
+                f"Summary - design position and working-range gradient{suffix}",
+                ("Curve", "Axle", f"{BASELINE_LABEL} @0", f"{VARIANT_LABEL} @0", "delta @0",
+                 f"{BASELINE_LABEL} slope", f"{VARIANT_LABEL} slope", "peak delta", "x tol"),
+                chunk,
+                subtitle=(
+                    "Values at zero are read from the sweep, not extrapolated. Slope is the "
+                    "least-squares gradient over the full swept range. 'x tol' is how many "
+                    "engineering tolerances the peak change spans."
+                ),
+                col_widths=[0.26, 0.06, 0.10, 0.10, 0.10, 0.11, 0.11, 0.09, 0.07],
+            )
+
+        if headline:
+            for start in range(0, len(headline), 6):
                 _grid_page(
-                    pdf, headline[6:], payloads,
-                    "Headline (continued)",
+                    pdf, headline[start:start + 6], payloads,
+                    "Headline - changes beyond engineering tolerance"
+                    + (" (continued)" if start else ""),
                 )
         else:
             _text_page(
                 pdf, "Headline",
-                ["No curve moved by more than "
-                 f"{MEANINGFUL_RELATIVE_DELTA:.0%} of its baseline range."],
+                [f"No published curve moved by more than one engineering tolerance ({tol_text})."],
             )
 
         appendix = [
@@ -316,6 +522,18 @@ def build_report(
 
         if four_post is not None:
             _text_page(pdf, "Four-post (experimental, secondary)", four_post["lines"], warn=True)
+            if four_post.get("rows"):
+                _table_page(
+                    pdf,
+                    "Four-post - jacking geometry",
+                    ("Metric", BASELINE_LABEL, VARIANT_LABEL, "Delta"),
+                    four_post["rows"],
+                    subtitle=(
+                        "Percentages are jacking geometry, not roll stiffness. "
+                        f"Actuation mode: {four_post['mode']}."
+                    ),
+                    col_widths=[0.46, 0.18, 0.18, 0.18],
+                )
 
     return out_path
 
@@ -328,57 +546,79 @@ def build_report(
 def write_summary_md(
     notes: Sequence[str],
     withheld: frozenset[str],
-    ranked: Sequence[tuple[dict[str, str], str, dict[str, float]]],
+    metrics: Sequence[dict[str, Any]],
     four_post: dict[str, Any] | None,
     path: Path,
+    tolerances: dict[str, float],
 ) -> Path:
+    tol_text = ", ".join(f"{unit}: {value:g}" for unit, value in sorted(tolerances.items()))
     lines = [f"# {VARIANT_LABEL} vs {BASELINE_LABEL} - kinematic overlay", "", "## Notes", ""]
     lines += [f"- {note}" for note in notes]
 
     if withheld:
         lines += [
             "",
-            "## Withheld pending datum resolution",
+            "## Withheld by the datum gate",
             "",
-            Z_DATUM_UNRESOLVED_WARNING,
+            "The vertical datum could not be vouched for, so every z-dependent output is",
+            "suppressed - roll-centre height and migration, absolute RC and IC z, front-view",
+            "swing arm, and the four-post jacking metrics.",
             "",
         ]
         lines += [f"- `{curve_id}`" for curve_id in sorted(withheld)]
 
-    meaningful = [item for item in ranked if item[2]["ratio"] >= MEANINGFUL_RELATIVE_DELTA]
+    published = [row for row in metrics if not row["withheld"]]
+    significant = [row for row in published if row["significance"] >= 1.0]
     lines += [
         "",
-        "## Curves that moved",
+        "## Design position and working-range gradient",
         "",
-        "Peak delta is the engineering quantity. The baseline range beside it is what that",
-        "delta should be read against - several rear curves (caster, trail, scrub) are",
-        "nearly flat on Orion, so a small absolute change is a large relative one. Ordering",
-        "is by the ratio, which is the only way to rank degrees against millimetres.",
+        f"Engineering tolerances: {tol_text}. Significance is peak change divided by the",
+        "tolerance for that unit, so it answers 'how many times bigger than negligible'.",
+        "Values at zero are read from an explicit sample, not extrapolated.",
         "",
-        "| Curve | Axle | Peak delta | Baseline range | Ratio |",
-        "|---|---|---:|---:|---:|",
+        "| Curve | Axle | Orion @0 | 2027 @0 | delta @0 | Orion slope | 2027 slope | Peak | x tol |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
-    if meaningful:
-        for meta, axle, score in meaningful:
-            ratio = score["ratio"]
-            shown = "baseline flat" if ratio == float("inf") else f"{ratio:.1f}x"
-            unit = meta["unit"]
-            lines.append(
-                f"| {meta['label']} | {axle} | {score['peak']:.3f} {unit} "
-                f"| {score['span']:.3f} {unit} | {shown} |"
-            )
-    else:
-        lines.append("| _none above threshold_ | | | | |")
+    for row in metrics:
+        sig = "withheld" if row["withheld"] else f"{row['significance']:.1f}"
+        unit, x_unit = row["unit"], row["x_unit"]
+        lines.append(
+            f"| {row['label']} | {row['axle']} "
+            f"| {_fmt(row['baseline_design'], unit)} | {_fmt(row['variant_design'], unit)} "
+            f"| {_fmt(row['design_delta'], unit)} "
+            f"| {_fmt(row['baseline_slope'])} /{x_unit} | {_fmt(row['variant_slope'])} /{x_unit} "
+            f"| {_fmt(row['peak'], unit)} | {sig} |"
+        )
 
-    unchanged = [item for item in ranked if item[2]["ratio"] == 0.0]
+    unchanged = [row for row in published if row["peak"] == 0.0]
     lines += [
         "",
-        f"{len(unchanged)} of {len(ranked)} curve/axle pairs are bit-identical between the "
-        "two cars (the axle this import does not touch).",
+        f"{len(significant)} of {len(published)} published curve/axle pairs exceed one "
+        f"engineering tolerance; {len(unchanged)} are bit-identical between the two cars "
+        "(the axle this import does not touch).",
     ]
 
     if four_post is not None:
         lines += ["", "## Four-post (experimental, secondary)", ""] + list(four_post["lines"])
+        if four_post.get("rows"):
+            lines += [
+                "",
+                f"| Metric | {BASELINE_LABEL} | {VARIANT_LABEL} | Delta |",
+                "|---|---:|---:|---:|",
+            ]
+            lines += [f"| {r[0]} | {r[1]} | {r[2]} | {r[3]} |" for r in four_post["rows"]]
+        restored = four_post.get("restored")
+        if restored:
+            lines += [
+                "",
+                "### Restored Modelica state",
+                "",
+                f"- records match baseline: `{restored['records_match_baseline']}` "
+                f"(state `{restored['state']}`, vehicle `{restored['vehicle_name']}`)",
+                f"- stamp present: `{restored['stamp_present']}`",
+                f"- executable present: `{restored['executable_present']}`",
+            ]
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -421,13 +661,56 @@ def write_stamp(signature: str, vehicle_name: str) -> None:
     )
 
 
-def build_four_post() -> None:
-    result = subprocess.run(
-        ["make", "standard-build-four-post"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
+def host_can_run(exe: Path) -> bool:
+    """Whether this host can execute the compiled simulator at all.
+
+    The Modelica build runs inside the Linux container, so on a Windows host it
+    produces an ELF binary the host cannot exec. Left undetected that surfaces
+    several layers down as `OSError: [WinError 193] %1 is not a valid Win32
+    application`, from inside the eval runner, long after the expensive build.
+    """
+    try:
+        magic = exe.open("rb").read(4)
+    except OSError:
+        return False
+    if magic[:4] == b"\x7fELF":
+        return os.name != "nt"
+    if magic[:2] == b"MZ":
+        return os.name == "nt"
+    return True
+
+
+def assert_four_post_is_runnable_here() -> None:
+    """Refuse before building if the result could not be executed afterwards."""
+    if os.name != "nt" or Path("/.dockerenv").exists():
+        return
+    raise StaleGeometryError(
+        "The four-post path cannot run on a Windows host.\n"
+        "The Modelica stack is compiled inside the Linux container, so the simulator "
+        "it produces is an ELF binary this host cannot execute; the run would fail "
+        "part-way through with WinError 193 after a long build.\n"
+        "Run the whole overlay inside the container instead:\n"
+        "  make shark-overlay ARGS=--four-post\n"
+        "which routes through `docker compose run` when --four-post is present. The "
+        "kinematic overlay is unaffected and still runs natively."
     )
+
+
+def build_four_post() -> None:
+    try:
+        result = subprocess.run(
+            ["make", "standard-build-four-post"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        # A missing or unlaunchable `make` is a refusal, not a crash: the caller
+        # relies on StaleGeometryError to trigger restoration and a clean exit.
+        raise StaleGeometryError(
+            f"Could not launch `make standard-build-four-post`: {exc}. "
+            "The four-post build could not be proven, so nothing is reported."
+        ) from exc
     if result.returncode != 0:
         raise StaleGeometryError(
             "Four-post build failed, so the simulator cannot be proven to match the "
@@ -445,6 +728,16 @@ def four_post_executable() -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def assert_binary_is_executable_here(label: str) -> None:
+    exe = four_post_executable()
+    if exe is not None and not host_can_run(exe):
+        raise StaleGeometryError(
+            f"[{label}] The compiled simulator at {exe.name} was built for a different "
+            "platform than this host, so it cannot be executed here. Run the overlay "
+            "inside the container: make shark-overlay ARGS=--four-post"
+        )
 
 
 def assert_binary_consumed_geometry(status: dict[str, Any], label: str) -> None:
@@ -470,6 +763,61 @@ def assert_binary_consumed_geometry(status: dict[str, Any], label: str) -> None:
             "`make` reported success without recompiling, so the binary still holds the "
             "previous hardpoints. Check the build dependencies for the generated record."
         )
+
+
+def invalidate_build_artifacts() -> list[str]:
+    """Drop the stamp and the compiled simulator.
+
+    Regenerating the records is not enough on its own: the executable on disk was
+    compiled from whichever car ran last, and the stamp asserts it matches. Leaving
+    either behind lets a later run pair the restored vehicle.yml with hardpoints
+    that are no longer in it. Removing both forces a rebuild, which is the only
+    state in which the pairing is provable.
+    """
+    removed: list[str] = []
+    if GEOMETRY_STAMP.is_file():
+        GEOMETRY_STAMP.unlink()
+        removed.append(GEOMETRY_STAMP.name)
+    exe = four_post_executable()
+    if exe is not None:
+        exe.unlink()
+        removed.append(exe.name)
+    return removed
+
+
+@contextlib.contextmanager
+def orion_modelica_stack(baseline_path: Path) -> Iterator[None]:
+    """Leave the Modelica stack describing the baseline, whatever happened inside.
+
+    A comparison writes the variant's records into BobLib. Without this the stack
+    is left describing the last car that ran, so the next unrelated build - a plain
+    `make standard-build`, the app, a teammate's run - silently compiles the
+    imported geometry while vehicle.yml says Orion.
+
+    The restore runs in a finally, so it covers a raised StaleGeometryError, a
+    failed build, and a KeyboardInterrupt alike. Artifact invalidation is itself in
+    a finally so that a failure to regenerate still cannot leave a stamped binary
+    claiming to match.
+    """
+    try:
+        yield
+    finally:
+        try:
+            generate_modelica_stack(baseline_path, root=ROOT)
+        finally:
+            invalidate_build_artifacts()
+
+
+def modelica_state_report(baseline_path: Path) -> dict[str, Any]:
+    """Describe the stack state, for post-run verification and for tests."""
+    status = modelica_stack_status_payload(baseline_path, ROOT)
+    return {
+        "records_match_baseline": status["state"] == "written",
+        "state": status["state"],
+        "vehicle_name": status["vehicle_name"],
+        "stamp_present": GEOMETRY_STAMP.is_file(),
+        "executable_present": four_post_executable() is not None,
+    }
 
 
 @contextlib.contextmanager
@@ -512,6 +860,7 @@ def run_four_post(vehicle_path: Path, label: str, *, skip_build: bool) -> dict[s
         if not skip_build:
             build_four_post()
             assert_binary_consumed_geometry(status, label)
+            assert_binary_is_executable_here(label)
             write_stamp(signature, status["vehicle_name"])
 
         stamped = read_stamp()
@@ -536,39 +885,225 @@ def run_four_post(vehicle_path: Path, label: str, *, skip_build: bool) -> dict[s
         return {"summary": result["summary"], "series": result["series"]}
 
 
+# These are jacking-geometry percentages: the share of load transfer reacted
+# through the links rather than the springs. They are not roll stiffness and not a
+# total anti-roll figure, and the labels say so because "anti-roll %" invites
+# exactly that misreading when an ARB is in play.
 SCALAR_METRICS = (
-    ("avg_anti_dive_pct", "Anti-dive (%)"),
-    ("avg_anti_squat_pct", "Anti-squat (%)"),
-    ("avg_anti_roll_front_pct", "Anti-roll front (%)"),
-    ("avg_anti_roll_rear_pct", "Anti-roll rear (%)"),
+    ("avg_anti_dive_pct", "Front anti-dive geometry (%)"),
+    ("avg_anti_squat_pct", "Rear anti-squat geometry (%)"),
+    ("avg_anti_roll_front_pct", "Front geometric anti-roll / lateral jacking (%)"),
+    ("avg_anti_roll_rear_pct", "Rear geometric anti-roll / lateral jacking (%)"),
+)
+
+_MISSING = object()
+
+# Actuation entries that carry force or compliance rather than hardpoint geometry.
+# A difference in any of these changes four-post forces independently of the
+# hardpoints, so it confounds a geometry comparison.
+# Spring and damper entries can be transplanted wholesale, because they are rates
+# rather than positions and carry no dependence on where the rocker sits.
+SHOCK_FORCE_PATHS: tuple[tuple[str, ...], ...] = (
+    ("shock", "spring_table"),
+    ("shock", "damper_table"),
+    ("shock", "free_length_m"),
+)
+
+FORCE_PATHS: tuple[tuple[str, ...], ...] = SHOCK_FORCE_PATHS + (
+    ("stabar", "rate_n_m_per_rad"),
+)
+
+# Actuation entries that are genuine geometry and are expected to move.
+GEOMETRY_PATHS: tuple[tuple[str, ...], ...] = (
+    ("rod_to",),
+    ("rod_mount_m",),
+    ("shock", "mount_m"),
+    ("bellcrank", "pivot_m"),
+    ("bellcrank", "axis"),
 )
 
 
-def four_post_section(runs: dict[str, Any], *, arb_kept: bool) -> dict[str, Any]:
+def _dig(mapping: Any, path: Sequence[str]) -> Any:
+    node = mapping
+    for key in path:
+        if not isinstance(node, dict) or key not in node:
+            return _MISSING
+        node = node[key]
+    return node
+
+
+def _shown(value: Any) -> str:
+    if value is _MISSING:
+        return "absent"
+    if isinstance(value, list) and value and isinstance(value[0], (int, float)):
+        return "[" + ", ".join(f"{v:.4g}" for v in value) + "]"
+    if isinstance(value, (dict, list)):
+        return "present"
+    return repr(value)
+
+
+def actuation_differences(baseline_path: Path, variant_path: Path) -> list[dict[str, Any]]:
+    """Report every actuation difference between the two cars, classified.
+
+    A four-post delta is only a geometry result if the force elements match. This
+    surfaces the ones that do not, so a confounded number is never presented as a
+    clean one.
+    """
+    base = yaml.safe_load(baseline_path.read_text(encoding="utf-8")) or {}
+    var = yaml.safe_load(variant_path.read_text(encoding="utf-8")) or {}
+    found: list[dict[str, Any]] = []
+
+    for axle in ("front", "rear"):
+        b = (base.get(axle) or {}).get("actuation") or {}
+        v = (var.get(axle) or {}).get("actuation") or {}
+
+        b_arb, v_arb = "stabar" in b, "stabar" in v
+        if b_arb != v_arb:
+            found.append({
+                "axle": axle, "field": "stabar (anti-roll bar)", "kind": "force",
+                "confound": True,
+                "baseline": "present" if b_arb else "absent",
+                "variant": "present" if v_arb else "absent",
+                "note": "an ARB changes lateral load transfer independently of hardpoints",
+            })
+
+        for path in FORCE_PATHS:
+            bv, vv = _dig(b, path), _dig(v, path)
+            if bv == vv or (bv is _MISSING and vv is _MISSING):
+                continue
+            # An ARB rate that vanishes with the whole bar is already reported above.
+            if path[0] == "stabar" and b_arb != v_arb:
+                continue
+            found.append({
+                "axle": axle, "field": ".".join(path), "kind": "force", "confound": True,
+                "baseline": _shown(bv), "variant": _shown(vv),
+                "note": "force element differs, so the delta is not purely geometric",
+            })
+
+        for path in GEOMETRY_PATHS:
+            bv, vv = _dig(b, path), _dig(v, path)
+            if bv == vv or (bv is _MISSING and vv is _MISSING):
+                continue
+            found.append({
+                "axle": axle, "field": ".".join(path), "kind": "geometry", "confound": False,
+                "baseline": _shown(bv), "variant": _shown(vv), "note": "",
+            })
+
+    return found
+
+
+def hold_baseline_actuation(
+    baseline_path: Path, variant_path: Path, out_path: Path
+) -> tuple[Path, list[str]]:
+    """Write a variant carrying the baseline's force elements, keeping its geometry.
+
+    This is the "geometry-only, baseline actuation held constant" mode: springs,
+    dampers and the anti-roll bar come from the baseline so a four-post delta is
+    attributable to hardpoints, while the actuation *geometry* the SHARK file
+    genuinely defines is kept.
+
+    Returns the written path and a list of what could not be held, which is not
+    always empty: an ARB pickup is defined in the baseline rocker's local frame, so
+    if the import moved the pivot the bar cannot be transplanted onto it.
+    """
+    base = yaml.safe_load(baseline_path.read_text(encoding="utf-8")) or {}
+    var = copy.deepcopy(yaml.safe_load(variant_path.read_text(encoding="utf-8")) or {})
+    unheld: list[str] = []
+
+    for axle in ("front", "rear"):
+        b = (base.get(axle) or {}).get("actuation") or {}
+        v = (var.get(axle) or {}).get("actuation") or {}
+        if not b or not v:
+            continue
+        for path in SHOCK_FORCE_PATHS:
+            value = _dig(b, path)
+            if value is _MISSING:
+                continue
+            node = v
+            for key in path[:-1]:
+                node = node.setdefault(key, {})
+            node[path[-1]] = copy.deepcopy(value)
+
+        if "stabar" in b and "stabar" not in v:
+            pickup = _dig(b, ("bellcrank", "pickups_m", "stabar"))
+            same_pivot = _dig(b, ("bellcrank", "pivot_m")) == _dig(v, ("bellcrank", "pivot_m"))
+            if pickup is not _MISSING and same_pivot:
+                v["stabar"] = copy.deepcopy(b["stabar"])
+                v.setdefault("bellcrank", {}).setdefault("pickups_m", {})["stabar"] = copy.deepcopy(pickup)
+            else:
+                unheld.append(
+                    f"{axle} anti-roll bar: the import moved the bellcrank pivot, so the "
+                    "baseline pickup no longer describes a physical rocker and the bar "
+                    "cannot be held constant"
+                )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(var, handle, sort_keys=False, default_flow_style=False)
+    return out_path, unheld
+
+
+def four_post_section(
+    runs: dict[str, Any],
+    *,
+    differences: Sequence[dict[str, Any]],
+    mode: str,
+    unheld: Sequence[str] = (),
+    gated: bool = False,
+) -> dict[str, Any]:
     """Render the secondary four-post block, with its caveats attached."""
+    confounds = [d for d in differences if d["confound"]]
     lines = [
-        "EXPERIMENTAL / SECONDARY. The four-post path depends on actuation data - ARB,",
-        "bellcrank and damper - that this workflow maintains in SolidWorks and Excel,",
-        "outside BobSim. The kinematic curves above do not depend on any of it.",
+        "EXPERIMENTAL / SECONDARY. Every percentage here is jacking geometry - the share",
+        "of load transfer reacted through the links - not roll stiffness and not a total",
+        "anti-roll figure. The kinematic curves are independent of all of it.",
+        "",
+        f"Actuation mode: {mode}.",
         "",
     ]
-    if not arb_kept:
+
+    if gated:
         lines += [
-            "The anti-roll bar was not imported, so any anti-roll or roll-stiffness number",
-            "below conflates the hardpoint change with a removed bar. Do not read it as a",
-            "geometry result.",
+            "WITHHELD. The vertical datum is unresolved, and jacking geometry is measured",
+            "against the contact patch, so every number below moves with the datum. They",
+            "are suppressed for the same reason the roll-centre curves are.",
             "",
         ]
+
+    if confounds:
+        lines += [
+            "CONFOUNDED - the two cars differ in force elements, so the deltas below are",
+            "NOT attributable to hardpoints alone:",
+            "",
+        ]
+        lines += [
+            f"  - {d['axle']} {d['field']}: {d['baseline']} -> {d['variant']}"
+            + (f"  ({d['note']})" if d["note"] else "")
+            for d in confounds
+        ]
+        lines.append("")
+    else:
+        lines += ["Force elements match between the two cars.", ""]
+
+    for item in unheld:
+        lines += [f"COULD NOT HOLD CONSTANT: {item}", ""]
+
+    geometry = [d for d in differences if not d["confound"]]
+    if geometry:
+        lines += ["Actuation geometry differences (expected, this is the change under test):", ""]
+        lines += [f"  - {d['axle']} {d['field']}: {d['baseline']} -> {d['variant']}" for d in geometry]
+        lines.append("")
+
     base = (runs.get(BASELINE_LABEL) or {}).get("summary") or {}
     var = (runs.get(VARIANT_LABEL) or {}).get("summary") or {}
-    if base and var:
-        lines += [f"| Metric | {BASELINE_LABEL} | {VARIANT_LABEL} | Delta |", "|---|---:|---:|---:|"]
+    rows: list[tuple[str, str, str, str]] = []
+    if base and var and not gated:
         for key, label in SCALAR_METRICS:
             b, v = base.get(key, float("nan")), var.get(key, float("nan"))
-            lines.append(f"| {label} | {b:.3f} | {v:.3f} | {v - b:+.3f} |")
-    else:
+            rows.append((label, f"{b:.3f}", f"{v:.3f}", f"{v - b:+.3f}"))
+    elif not gated:
         lines.append("Four-post produced no summary.")
-    return {"lines": lines}
+    return {"lines": lines, "rows": rows, "confounded": bool(confounds), "mode": mode}
 
 
 # --------------------------------------------------------------------------
@@ -605,9 +1140,29 @@ def main(argv: list[str] | None = None) -> int:
         "--four-post", action="store_true",
         help="Also run the experimental four-post force sim (needs a Modelica build)",
     )
+    parser.add_argument(
+        "--actuation",
+        choices=("geometry-only", "imported"),
+        default="geometry-only",
+        help=(
+            "geometry-only: hold the baseline springs, dampers and ARB constant so a "
+            "four-post delta is attributable to hardpoints. imported: use the variant's "
+            "own actuation and report the resulting confounds."
+        ),
+    )
     parser.add_argument("--skip-build", action="store_true", help="Do not rebuild (guard still enforced)")
+    parser.add_argument(
+        "--tol-deg", type=float, default=DEFAULT_TOLERANCES["deg"],
+        help="Angle change considered negligible, for ranking (deg)",
+    )
+    parser.add_argument(
+        "--tol-mm", type=float, default=DEFAULT_TOLERANCES["mm"],
+        help="Length change considered negligible, for ranking (mm)",
+    )
     parser.add_argument("--out", default=str(OUT_DIR / "shark_overlay_report.pdf"))
     args = parser.parse_args(argv)
+
+    tolerances = {"deg": args.tol_deg, "mm": args.tol_mm}
 
     baseline_path = Path(args.baseline)
     variant_path = Path(args.variant)
@@ -628,11 +1183,9 @@ def main(argv: list[str] | None = None) -> int:
             vehicle_name=VARIANT_LABEL,
         )
         write_vehicle(merged, variant_path)
-        write_datum_sidecar(variant_path, report["datum"])
+        write_datum_sidecar(variant_path, report["axle"], report["datum"], merged)
         notes += list(report["notes"])
         notes.append(f"Imported {args.shark} onto {import_baseline.name} -> {variant_path.name}")
-        if report["datum"]["status"] != "shared_ground_plane":
-            withheld = frozenset(Z_DEPENDENT_CURVE_IDS)
     else:
         notes.append(f"No --shark given; overlaying the tracked {variant_path.name} as it stands.")
 
@@ -640,20 +1193,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"No variant vehicle at {variant_path}. Pass --shark to create it.", file=sys.stderr)
         return 1
 
-    # The datum caveat is a property of the imported file, not of this invocation, so
-    # it must survive a run that does not re-import. Absence of a record is treated as
-    # unknown, not as agreement: only a positive "shared_ground_plane" publishes the
-    # z-dependent curves, so a missing sidecar fails safe instead of silently
-    # publishing exactly what the datum question puts in doubt.
-    if not withheld:
-        datum_status = read_datum_status(variant_path)
-        if datum_status != "shared_ground_plane":
-            withheld = frozenset(Z_DEPENDENT_CURVE_IDS)
-            if datum_status is None:
-                notes.append(
-                    f"No datum record beside {variant_path.name}; withholding z-dependent "
-                    "curves rather than assuming the frames share a vertical datum."
-                )
+    # One gate for every z-dependent output, evaluated against the file on disk
+    # rather than against this invocation, so it survives a run that does not
+    # re-import. It fails closed: missing, unresolved for any imported axle, or
+    # digest-mismatched all withhold.
+    gate = datum_gate(variant_path)
+    if not gate["valid"]:
+        withheld = frozenset(Z_DEPENDENT_CURVE_IDS)
+        notes.append(f"DATUM GATE CLOSED - {gate['reason']}. Z-dependent outputs withheld.")
+    else:
+        notes.append(f"Datum gate open - {gate['reason']}.")
 
     payloads = {
         BASELINE_LABEL: kinematic_payload(baseline_path),
@@ -664,33 +1213,74 @@ def main(argv: list[str] | None = None) -> int:
             notes.append(f"{label}: {warning}")
 
     notes.append(
-        "Sweep ranges are the app registry defaults, so these curves are directly "
-        "comparable to the app's kinematics view."
+        f"Sweep ranges match the app registry defaults; the point count is raised to "
+        f"{len(BUMP_SWEEP_M)}/{len(ROLL_SWEEP_DEG)} so the design position is sampled "
+        "rather than falling between two points as it does on the app's even grid."
     )
     notes.append(
         "The anti-roll bar takes no part in the kinematic solve; it is handled outside "
         "this tool."
     )
 
-    ranked = rank_curves(payloads, withheld)
+    metrics = curve_metrics(payloads, withheld, tolerances)
 
     four_post: dict[str, Any] | None = None
     if args.four_post:
-        runs: dict[str, Any] = {}
-        for label, path in ((BASELINE_LABEL, baseline_path), (VARIANT_LABEL, variant_path)):
-            try:
-                runs[label] = run_four_post(path, label, skip_build=args.skip_build)
-            except StaleGeometryError as exc:
-                print(f"REFUSING TO REPORT\n\n{exc}", file=sys.stderr)
-                return 1
-        four_post = four_post_section(runs, arb_kept=args.keep_arb)
+        # Checked before the build, not after: the failure is a property of the host
+        # and there is no point spending a Modelica compile to discover it.
+        try:
+            assert_four_post_is_runnable_here()
+        except StaleGeometryError as exc:
+            print(f"REFUSING TO RUN\n\n{exc}", file=sys.stderr)
+            return 1
+        sim_variant_path = variant_path
+        unheld: list[str] = []
+        if args.actuation == "geometry-only":
+            sim_variant_path, unheld = hold_baseline_actuation(
+                baseline_path, variant_path, OUT_DIR / "shark_geometry_only.yml"
+            )
+        differences = actuation_differences(baseline_path, sim_variant_path)
 
-    out = build_report(payloads, notes, withheld, ranked, four_post, Path(args.out))
-    md = write_summary_md(notes, withheld, ranked, four_post, Path(args.out).with_suffix(".md"))
+        runs: dict[str, Any] = {}
+        failure: str | None = None
+        # Whatever happens inside, BobLib is left describing the baseline again.
+        with orion_modelica_stack(baseline_path):
+            for label, path in ((BASELINE_LABEL, baseline_path), (VARIANT_LABEL, sim_variant_path)):
+                try:
+                    runs[label] = run_four_post(path, label, skip_build=args.skip_build)
+                except StaleGeometryError as exc:
+                    failure = str(exc)
+                    break
+        restored = modelica_state_report(baseline_path)
+        if failure is not None:
+            print(f"REFUSING TO REPORT\n\n{failure}", file=sys.stderr)
+            print(
+                "\nModelica state restored to the baseline: "
+                f"records_match_baseline={restored['records_match_baseline']} "
+                f"stamp_present={restored['stamp_present']} "
+                f"executable_present={restored['executable_present']}",
+                file=sys.stderr,
+            )
+            return 1
+        # Jacking geometry is measured against the contact patch, so it moves with
+        # the datum exactly as the roll-centre curves do and takes the same gate.
+        four_post = four_post_section(
+            runs, differences=differences, mode=args.actuation,
+            unheld=unheld, gated=not gate["valid"],
+        )
+        four_post["restored"] = restored
+
+    out = build_report(
+        payloads, notes, withheld, metrics, four_post, Path(args.out), tolerances
+    )
+    md = write_summary_md(
+        notes, withheld, metrics, four_post, Path(args.out).with_suffix(".md"), tolerances
+    )
     print(f"Wrote {out}")
     print(f"Wrote {md}")
     if withheld:
-        print(f"  WARNING: {Z_DATUM_UNRESOLVED_WARNING}")
+        print(f"  WARNING: DATUM GATE CLOSED - {gate['reason']}")
+        print(f"  WARNING: {len(withheld)} z-dependent outputs withheld, including four-post jacking")
     for note in notes:
         print(f"  note: {note}")
     return 0

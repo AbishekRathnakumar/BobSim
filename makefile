@@ -130,7 +130,11 @@ help:
 		'  standard-build            Build BobLib VehicleSim' \
 		'  standard-build-four-post  Build BobLib FourPostSim' \
 		'  shark-overlay             Overlay the imported car against Orion on the kinematic' \
-		'                            curves ([SHARK=file.shk] [ARGS=--four-post|--keep-arb])' \
+		'                            curves. [SHARK=file.shk] to import first.' \
+		'                            ARGS=--four-post adds the experimental force sim;' \
+		'                            --actuation imported uses the variant actuation instead' \
+		'                            of holding the baseline constant; --tol-deg/--tol-mm set' \
+		'                            the engineering tolerances used for ranking.' \
 		'' \
 		'  standard-eval-ramp-steer   Run RampSteerEval' \
 		'  standard-eval-steady-state Run SteadyStateEval' \
@@ -266,8 +270,12 @@ $(FOUR_POST_SIM_EXE): $(FOUR_POST_SIM_MODEL) $(BUILD_FOUR_POST_MOS) $(BOBLIB_PAC
 # no Modelica toolchain, so a container buys nothing here. Only ARGS=--four-post
 # needs Docker, and that path shells out to `make standard-build-four-post` itself.
 SHARK_ARG := $(if $(SHARK),--shark $(SHARK),)
+# The kinematic overlay is pure Python and runs on the host. --four-post is not:
+# the Modelica stack is compiled inside the container, so the simulator it produces
+# only runs there. Route the whole command into the container in that case.
+SHARK_RUN := $(if $(findstring --four-post,$(ARGS)),$(RUN) ,)
 shark-overlay:
-	$(PYTHON) -m _3_StandardSim.FourPostEval.shark_overlay_report $(SHARK_ARG) $(ARGS)
+	$(SHARK_RUN)$(PYTHON) -m _3_StandardSim.FourPostEval.shark_overlay_report $(SHARK_ARG) $(ARGS)
 
 standard-build: $(VEHICLE_SIM_EXE)
 
