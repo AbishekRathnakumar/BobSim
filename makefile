@@ -263,19 +263,17 @@ $(FOUR_POST_SIM_EXE): $(FOUR_POST_SIM_MODEL) $(BUILD_FOUR_POST_MOS) $(BOBLIB_PAC
 		$(GENERATED_RECORDS) $(GENERATED_TEMPLATES)
 	$(RUN) bash -lc 'omc $(WORKSPACE)/$(BUILD_FOUR_POST_MOS) && test -f $(WORKSPACE)/$(FOUR_POST_SIM_EXE)'
 
-# SHARK is optional: with it, the file is imported into the tracked variant vehicle
-# first; without it, the already-imported variant is overlaid as it stands.
+# SHARK is optional: with it the file is imported into the tracked variant vehicle
+# first; without it the already-imported variant is overlaid as it stands.
 #
-# Runs on the host, not through $(RUN). The kinematic solve is pure Python and needs
-# no Modelica toolchain, so a container buys nothing here. Only ARGS=--four-post
-# needs Docker, and that path shells out to `make standard-build-four-post` itself.
+# Runs in the container like every other target here. The kinematic solve would work
+# on the host, but ARGS=--four-post would not: the Modelica stack is compiled inside
+# the container, so the simulator it produces only runs there. One route for both
+# keeps this consistent with the rest of the file and removes a whole class of
+# host/container mismatch.
 SHARK_ARG := $(if $(SHARK),--shark $(SHARK),)
-# The kinematic overlay is pure Python and runs on the host. --four-post is not:
-# the Modelica stack is compiled inside the container, so the simulator it produces
-# only runs there. Route the whole command into the container in that case.
-SHARK_RUN := $(if $(findstring --four-post,$(ARGS)),$(RUN) ,)
 shark-overlay:
-	$(SHARK_RUN)$(PYTHON) -m _3_StandardSim.FourPostEval.shark_overlay_report $(SHARK_ARG) $(ARGS)
+	$(RUN) $(PYTHON) -m _3_StandardSim.FourPostEval.shark_overlay_report $(SHARK_ARG) $(ARGS)
 
 standard-build: $(VEHICLE_SIM_EXE)
 

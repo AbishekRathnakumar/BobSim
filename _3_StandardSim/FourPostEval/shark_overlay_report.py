@@ -40,12 +40,13 @@ from _0_Utils.shark_import import (
     write_vehicle,
 )
 from _0_Utils.kin_py.kinematics import DEFAULT_ROLL_DEG, DEFAULT_SWEEP_M
+from _0_Utils.vehicle_io import load_yaml, repo_root, vehicle_yaml_path
 from _5_App.kinematics import KINEMATIC_CURVE_META, kinematic_curves_payload
 from _5_App.modelica_generator import generate_modelica_stack, modelica_stack_status_payload
 
 
-ROOT = Path(__file__).resolve().parents[2]
-VEHICLE_YAML = ROOT / "vehicle.yml"
+ROOT = repo_root()
+VEHICLE_YAML = vehicle_yaml_path()
 DEFAULT_VARIANT_YAML = ROOT / "vehicle_2027.yml"
 BUILD_DIR = ROOT / "_3_StandardSim/BuildBobLib/FourPostSim"
 GEOMETRY_STAMP = BUILD_DIR / ".bobsim_geometry_stamp.json"
@@ -80,29 +81,31 @@ REAR_RELABEL = {
 }
 
 
-def display_label(meta: dict[str, str], axle: str) -> str:
-    """Curve label as shown to a reader, corrected for the axle it describes."""
+def _rear_relabel(meta: dict[str, str], axle: str) -> str | None:
+    """The replacement term for this curve on this axle, if it needs one."""
     if axle != "rear":
+        return None
+    return next(
+        (term for token, term in REAR_RELABEL.items() if token in meta["id"]), None
+    )
+
+
+def display_label(meta: dict[str, str], axle: str) -> str:
+    """Curve title as shown to a reader, corrected for the axle it describes."""
+    term = _rear_relabel(meta, axle)
+    if term is None:
         return meta["label"]
-    for token, replacement in REAR_RELABEL.items():
-        if token in meta["id"]:
-            prefix = "Bump" if meta["id"].startswith("bump") else "Roll"
-            return f"{prefix} {replacement}"
-    return meta["label"]
+    return f"{'Bump' if meta['id'].startswith('bump') else 'Roll'} {term}"
 
 
 def display_y_label(meta: dict[str, str], axle: str) -> str:
-    """Axis label, relabelled on the same terms as the curve title.
+    """Axis label, relabelled on the same terms as the title.
 
-    Kept in step with `display_label` deliberately: a plot titled "Kingpin side-view
-    inclination" with a y axis reading "Caster" is worse than not renaming at all.
+    Shares `_rear_relabel` with `display_label` so the two cannot drift: a plot
+    titled "Kingpin side-view inclination" whose y axis reads "Caster" is worse
+    than not renaming at all.
     """
-    if axle != "rear":
-        return meta["y_label"]
-    for token, replacement in REAR_RELABEL.items():
-        if token in meta["id"]:
-            return replacement
-    return meta["y_label"]
+    return _rear_relabel(meta, axle) or meta["y_label"]
 
 
 class StaleGeometryError(RuntimeError):
@@ -144,7 +147,7 @@ def kinematic_payload(vehicle_path: Path) -> dict[str, Any]:
     app's kinematics view; only the point count differs, to put the design
     position on a sample rather than between two.
     """
-    vehicle = yaml.safe_load(vehicle_path.read_text(encoding="utf-8"))
+    vehicle = load_yaml(vehicle_path)
     return kinematic_curves_payload(vehicle, BUMP_SWEEP_M, ROLL_SWEEP_DEG)
 
 
@@ -949,8 +952,8 @@ def actuation_differences(baseline_path: Path, variant_path: Path) -> list[dict[
     surfaces the ones that do not, so a confounded number is never presented as a
     clean one.
     """
-    base = yaml.safe_load(baseline_path.read_text(encoding="utf-8")) or {}
-    var = yaml.safe_load(variant_path.read_text(encoding="utf-8")) or {}
+    base = load_yaml(baseline_path)
+    var = load_yaml(variant_path)
     found: list[dict[str, Any]] = []
 
     for axle in ("front", "rear"):
@@ -1006,8 +1009,8 @@ def hold_baseline_actuation(
     always empty: an ARB pickup is defined in the baseline rocker's local frame, so
     if the import moved the pivot the bar cannot be transplanted onto it.
     """
-    base = yaml.safe_load(baseline_path.read_text(encoding="utf-8")) or {}
-    var = copy.deepcopy(yaml.safe_load(variant_path.read_text(encoding="utf-8")) or {})
+    base = load_yaml(baseline_path)
+    var = copy.deepcopy(load_yaml(variant_path))
     unheld: list[str] = []
 
     for axle in ("front", "rear"):
