@@ -630,9 +630,13 @@ class CornerKinematics:
 def kinematic_curves_payload(
     vehicle: dict[str, Any],
     sweep_m: list[float] | tuple[float, ...] | None = None,
+    roll_deg: list[float] | tuple[float, ...] | None = None,
 ) -> dict[str, Any]:
+    # roll_deg is overridable for the same reason sweep_m is: neither default
+    # samples zero, so a caller reporting design-position values has to supply its
+    # own grid rather than interpolate one.
     sweep = _clean_sweep(sweep_m)
-    roll = DEFAULT_ROLL_DEG
+    roll = tuple(float(value) for value in roll_deg) if roll_deg else DEFAULT_ROLL_DEG
     payload: dict[str, Any] = {
         "model": "BobSim native double-wishbone kinematics preview",
         "basis": "Active plot deck mirrors simulation_toolkit/src/simulations/kin/kin_inputs/kin.yml",
