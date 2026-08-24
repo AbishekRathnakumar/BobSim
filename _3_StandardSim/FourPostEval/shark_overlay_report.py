@@ -1200,7 +1200,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--baseline", default=str(VEHICLE_YAML), help="Baseline vehicle.yml (Orion)")
     parser.add_argument(
         "--variant", default=str(DEFAULT_VARIANT_YAML),
-        help="Tracked vehicle.yml holding the imported car",
+        help="Variant vehicle.yml holding the imported car (gitignored by default)",
     )
     parser.add_argument(
         "--import-baseline", default=None,
