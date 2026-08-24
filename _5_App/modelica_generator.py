@@ -990,7 +990,10 @@ def _format_call(call: ModelicaCall, indent: int) -> str:
     lines = [f"{call.type_name}(" if call.type_name else "("]
     for index, (name, value) in enumerate(assignments):
         suffix = "," if index < len(assignments) - 1 else ""
-        lines.extend(_format_assignment(name, value, indent + 2, suffix))
+        # +4, not +2: this is the indent BobLib's checked-in records already use.
+        # Emitting +2 made every regeneration rewrite files whose values had not
+        # changed, so the library showed hundreds of lines of pure whitespace diff.
+        lines.extend(_format_assignment(name, value, indent + 4, suffix))
     lines.append(f"{' ' * indent})")
     return "\n".join(lines)
 
