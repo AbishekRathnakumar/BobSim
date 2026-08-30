@@ -49,7 +49,7 @@ def _sample_lhs(
     n_samples: int,
     seed: int | None,
 ) -> list[dict[str, float]]:
-    lhs = LatinHypercube(d=len(variables), seed=seed)
+    lhs = LatinHypercube(d=len(variables), seed=seed)  # type: ignore[call-arg]
     unit_samples = lhs.random(n=n_samples)
 
     variants: list[dict[str, float]] = [baseline.copy()]

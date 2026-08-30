@@ -39,6 +39,7 @@ targets) needs either the container or a local `omc` on `PATH`.
 | `docker-*` | Build/rebuild the dev image |
 | `shell-*` | Interactive shell in a workflow context |
 | `standard-*` | Build and run standard vehicle evaluations |
+| `lap-*` | QSS and transient reduced-order lap simulations |
 | `envelope-*` | GGV / YMD performance-envelope maps |
 | `opt-*` | Sensitivity, response-surface, and DOE workflows |
 | `clean-*` | Remove generated artifacts |
@@ -65,6 +66,34 @@ make standard-eval-four-post   # uses the separate FourPostSim executable
 ```
 
 Output: `_3_StandardSim/generated_results/` (`*_report_metrics.csv`, `*_report.pdf`).
+
+## Lap-time simulation
+
+```bash
+make lap-eval-qss        # optimize line and QSS speed profile
+make lap-eval-transient  # repeat optimization, then integrate the transient model
+make lap-eval            # write both result sets in one run
+make lap-eval-all-dof    # repeat with model-specific maps for all four fidelities
+make lap-validation-visuals  # disposable figures under temp/lap_time_validation/
+```
+
+The config selects one shared `model_dof` (3, 6, 10, or 14) for GGV generation
+and transient integration. Output lands in
+`_3_StandardSim/generated_results/lap_time_eval/`. See
+[lap-time-simulation.md](lap-time-simulation.md) for the track schema,
+optimization objective, and validation interpretation.
+
+Compare precomputed suspension-kinematics grid sizes with an in-loop nonlinear
+constraint solve:
+
+```bash
+make reduced-kinematics-benchmark
+```
+
+The benchmark writes `temp/kinematics_benchmark/summary.json`. Short reduced
+transients can use the nonlinear backend directly with
+`make reduced-eval REDUCED_KINEMATICS=nonlinear`; production envelopes and laps
+should normally retain the lookup backend.
 
 ## Envelopes and sensitivities
 

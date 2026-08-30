@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 
 from _shared.console import elapsed, stage
@@ -48,8 +49,39 @@ def run() -> None:
     scope_path = BUILD_DIR / "envelope_sensitivity_scope.csv"
     input_df = write_envelope_variant_table(variants, inputs_path)
     scope_df.to_csv(scope_path, index=False)
+    manifest_path = BUILD_DIR / "envelope_study_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema": "bobsim.envelope-study-manifest.v1",
+                "sampling": "one_at_a_time_interval_splice",
+                "maximum_changed_parameters_per_variant": 1,
+                "competition_points_supported": False,
+                "reported_response": "raw vehicle capability and event-time proxies",
+                "swept_parameter_space": scope_df.to_dict(orient="records"),
+                "active_model_space": [
+                    "quasi-steady GGV speed and ax/ay operating points",
+                    "quasi-steady YMD beta and roadwheel-steer operating points",
+                    "load-sensitive combined-slip tire projection",
+                    "nominal ride-height aero with explicit CoP/balance",
+                    "power, drive distribution, brake bias, and roll-stiffness controls",
+                ],
+                "known_limits": [
+                    "no competition telemetry response-space coverage",
+                    "no aero yaw dependence",
+                    "no tire temperature, wear, or relaxation state",
+                    "no energy depletion or thermal derating state",
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     print(f"Inputs: {inputs_path}")
     print(f"Scope:  {scope_path}")
+    print(f"Manifest: {manifest_path}")
 
     stage(3, 5, "Running EnvelopeSim sensitivities")
     t = time.time()

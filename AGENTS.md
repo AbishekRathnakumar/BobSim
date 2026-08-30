@@ -12,6 +12,8 @@ Don't read the whole folder. Route by task:
 | Anything non-trivial, first time in the repo | [`docs/architecture.md`](docs/architecture.md) |
 | Running / building / testing something | [`docs/workflows.md`](docs/workflows.md) |
 | Parameter sweeps, sensitivities, target-metrics → vehicle | [`docs/doe-reverse-engineering.md`](docs/doe-reverse-engineering.md) |
+| Reduced 3/6/10/14DOF dynamics, QSS envelopes, BobLib correlation | [`docs/reduced-order-dynamics.md`](docs/reduced-order-dynamics.md) |
+| QSS racing lines, speed profiles, and transient laps | [`docs/lap-time-simulation.md`](docs/lap-time-simulation.md) |
 | Modelica missing, build fails, BobLib edits | [`docs/boblib-submodule.md`](docs/boblib-submodule.md) |
 | Touching `_5_App/` | [`_5_App/README.md`](_5_App/README.md) — module-by-module ownership |
 | Touching physics / regression baselines | [`CONTRIBUTING.md`](CONTRIBUTING.md) |

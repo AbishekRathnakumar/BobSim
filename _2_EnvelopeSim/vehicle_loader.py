@@ -29,6 +29,7 @@ class ActiveEnvelopeInputs:
     aero_balance_front: float
     max_drive_power: float
     max_drive_force: float
+    max_drive_speed: float
     max_brake_force: float
     drive_distribution_front: float
     brake_distribution_front: float
@@ -69,6 +70,7 @@ def load_active_envelope_inputs(path: str | Path | None = None) -> ActiveEnvelop
         aero_balance_front=float(vehicle.aero_balance_front),
         max_drive_power=float(vehicle.max_drive_power),
         max_drive_force=float(vehicle.max_drive_force),
+        max_drive_speed=float(vehicle.max_drive_speed),
         max_brake_force=float(vehicle.max_brake_force),
         drive_distribution_front=float(vehicle.drive_distribution_front),
         brake_distribution_front=float(vehicle.brake_distribution_front),

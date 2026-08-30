@@ -342,10 +342,10 @@ def _sort_xy(x: Any, y: Any) -> tuple[np.ndarray, np.ndarray]:
     size = min(x_arr.size, y_arr.size)
     if size <= 0:
         return np.array([], dtype=float), np.array([], dtype=float)
-    x_arr = x_arr[:size]
-    y_arr = y_arr[:size]
-    idx = np.argsort(x_arr)
-    return x_arr[idx], y_arr[idx]
+    x_trimmed = x_arr[:size]
+    y_trimmed = y_arr[:size]
+    idx = np.argsort(x_trimmed)
+    return x_trimmed[idx], y_trimmed[idx]
 
 
 def _has_variation(

@@ -42,6 +42,9 @@ driver_mass:
     - 6.749042
 body:
   torsional_stiff_n_m_per_rad: 300000
+brake:
+  # Fraction of total braking force commanded at the front axle.
+  front_bias: 0.84
 front:
   wheel:
     radius_m: 0.2045
@@ -563,6 +566,7 @@ powertrain:
     SOC_start: 1
   pVCU:
     tau_max: 230
+    P_max_mot: 80000
     regenTorqueLimit: 220
     w_eps: 1
     motorSpeedSign: 1
