@@ -618,7 +618,7 @@ def _trim_is_racing_feasible(
     max_abs_beta_rad: float,
     max_abs_steering_rad: float,
 ) -> bool:
-    """Reject unloaded and high-sideslip equilibrium roots.
+    """Reject equilibrium roots outside the racing and fitted-tire domain.
 
     GGV is an acceleration capability map at zero yaw rate, not a corner-radius
     trim. Its steering sign is therefore a tire-force sign convention and must
@@ -643,9 +643,12 @@ def _trim_is_racing_feasible(
         if not np.allclose(tire_fx, requested_fx, rtol=2e-3, atol=1.0):
             return False
 
+    normal_loads = np.asarray(trim.output.normal_loads_n, dtype=float)
+    tire = model.parameters.tire
     return bool(
         trim.success
-        and np.all(trim.output.normal_loads_n > 0.0)
+        and np.all(normal_loads >= float(tire.fz_min_n))
+        and np.all(normal_loads <= float(tire.fz_max_n))
         and abs(beta) <= max_abs_beta_rad
         and abs(steering) <= max_abs_steering_rad
     )

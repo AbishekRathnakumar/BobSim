@@ -706,7 +706,7 @@ def test_rear54_6dof_lateral_endpoint_continues_upper_branch_at_14_mps(parameter
     assert ax == pytest.approx(0.0, abs=1e-12)
 
 
-def test_rear55_6dof_lateral_endpoint_accepts_phase_shifted_interval_at_10_mps(
+def test_rear55_6dof_lateral_endpoint_respects_tir_load_floor_at_10_mps(
     parameters,
 ):
     cg_height_m = 11.5 * 0.0254
@@ -742,7 +742,7 @@ def test_rear55_6dof_lateral_endpoint_accepts_phase_shifted_interval_at_10_mps(
         for _ in range(2)
     ]
 
-    assert endpoints[0][0] == pytest.approx(14.175349769287, abs=1e-9)
+    assert endpoints[0][0] == pytest.approx(13.51866813793945, abs=1e-9)
     assert endpoints[0][1] == pytest.approx(0.0, abs=1e-12)
     assert endpoints[1] == pytest.approx(endpoints[0], abs=1e-12)
 
