@@ -26,6 +26,8 @@ REDUCED_SUSPENSION_METRICS ?= _3_StandardSim/generated_results/four_post_eval_re
 LAP_CONFIG ?= _3_StandardSim/LapTimeEval/lap_time_eval_config.yml
 LAP_SCENARIO ?= both
 LAP_DOF ?=
+QCM_CONFIG ?= _3_StandardSim/QuarterCarPSD/quarter_car_psd_config.yml
+QCM_GRIP_CONFIG ?= _3_StandardSim/QuarterCarPSD/grip_config.yml
 
 # DOE sweep size overrides. Empty means "use configs/vehicle_architecture.yaml".
 DOE_METHOD ?=
@@ -167,6 +169,10 @@ help:
 		'    example: make opt-standard DOE_METHOD=lhs DOE_SAMPLES=3' \
 		'' \
 		'  regression-invariants     Check current regression artifacts for physical consistency' \
+		'  quarter-car-psd           ISO 8608 wheelrate/CPLV sweep (QCM_CONFIG override)' \
+		'  quarter-car-psd-test      Quarter-car physics and PSD normalization checks' \
+		'  quarter-car-grip          Finite-record wheelrate versus lateral tire capacity' \
+		'  quarter-car-grip-test     Tire-domain, force, road and quarter-car checks' \
 		'  regression-baseline       Run full default StandardSim baseline simulations' \
 		'  standard-regression-four-post  Alias for regression-baseline' \
 		'' \
@@ -275,6 +281,20 @@ standard-eval-four-post: standard-build-four-post
 	$(RUN) $(PYTHON) -m _3_StandardSim.FourPostEval.four_post_eval_sim
 
 standard-eval-all: standard-eval-ramp-steer standard-eval-steady-state standard-eval-transient standard-eval-four-post
+
+.PHONY: quarter-car-psd quarter-car-psd-test
+.PHONY: quarter-car-grip quarter-car-grip-test
+quarter-car-grip:
+	$(RUN) $(PYTHON) -m _3_StandardSim.QuarterCarPSD.grip_sweep --config $(QCM_GRIP_CONFIG)
+
+quarter-car-grip-test:
+	$(RUN) $(PYTHON) -m pytest tests/test_quarter_car_grip.py tests/test_quarter_car_psd.py -q
+
+quarter-car-psd:
+	$(RUN) $(PYTHON) -m _3_StandardSim.QuarterCarPSD.quarter_car_psd --config $(QCM_CONFIG)
+
+quarter-car-psd-test:
+	$(RUN) $(PYTHON) -m pytest tests/test_quarter_car_psd.py -q
 
 reduced-eval:
 	$(RUN) $(PYTHON) -m _3_StandardSim.ReducedOrderEval.reduced_order_eval_sim \

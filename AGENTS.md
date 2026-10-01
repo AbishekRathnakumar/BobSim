@@ -13,6 +13,7 @@ Don't read the whole folder. Route by task:
 | Running / building / testing something | [`docs/workflows.md`](docs/workflows.md) |
 | Parameter sweeps, sensitivities, target-metrics → vehicle | [`docs/doe-reverse-engineering.md`](docs/doe-reverse-engineering.md) |
 | Reduced 3/6/10/14DOF dynamics, QSS envelopes, BobLib correlation | [`docs/reduced-order-dynamics.md`](docs/reduced-order-dynamics.md) |
+| ISO 8608 wheelrate/CPLV sweep | [`_3_StandardSim/QuarterCarPSD/README.md`](_3_StandardSim/QuarterCarPSD/README.md) |
 | QSS racing lines, speed profiles, and transient laps | [`docs/lap-time-simulation.md`](docs/lap-time-simulation.md) |
 | Modelica missing, build fails, BobLib edits | [`docs/boblib-submodule.md`](docs/boblib-submodule.md) |
 | Touching `_5_App/` | [`_5_App/README.md`](_5_App/README.md) — module-by-module ownership |

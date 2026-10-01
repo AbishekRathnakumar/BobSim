@@ -1,0 +1,12 @@
+vehicle: 2027.yml
+speed_mps: 15.0
+wheelrate_min_n_per_m: 5000.0
+wheelrate_max_n_per_m: 50000.0
+wheelrate_points: 181
+damping_ratio: 0.70
+spatial_frequency_min_cycles_per_m: 0.01
+spatial_frequency_max_cycles_per_m: 10.0
+frequency_points: 8193
+iso_classes: [A, B, C, D, E, F, G, H]
+contact_loss_probability_limit: 0.01
+output: _3_StandardSim/generated_results/quarter_car_psd_2027

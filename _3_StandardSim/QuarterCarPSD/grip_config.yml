@@ -1,0 +1,7 @@
+qcm_config: _3_StandardSim/QuarterCarPSD/quarter_car_psd_config.yml
+duration_s: 64
+sample_rate_hz: 2400
+seeds: [2027, 2028, 2029]
+slip_grid_points: 121
+histogram_bins: 256
+output: _3_StandardSim/generated_results/quarter_car_grip_2027
