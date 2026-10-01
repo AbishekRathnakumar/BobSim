@@ -22,7 +22,9 @@ Read in this order:
 - Numbered top-level directories (`_0_Utils` … `_5_App`) are pipeline *layers*,
   not an import ordering. See [architecture.md](architecture.md).
 - Anything under a `Build/`, `results/`, `generated_results/`, `population/`, or
-  `user_data/` directory is generated runtime content and is gitignored. Never
-  hand-edit it and never commit it.
+  `user_data/` directory is generated runtime content and is gitignored by default.
+  When publishing a study, include its plots, CSVs and relevant summary/validation
+  metadata for future reference, using narrow ignore exceptions. Other runtime
+  content stays ignored. Regenerate outputs rather than hand-editing them.
 - `make help` is the authoritative list of targets. These docs explain the
   *why*; the makefile is the *what*.

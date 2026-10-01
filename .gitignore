@@ -61,6 +61,17 @@ _3_StandardSim/BuildBobLib/
 _3_StandardSim/generated_results/**
 !_3_StandardSim/generated_results/
 !_3_StandardSim/generated_results/.gitkeep
+# Published quarter-car study deliverables (owner request, 2026-10-01).
+!_3_StandardSim/generated_results/quarter_car_psd_2027/
+!_3_StandardSim/generated_results/quarter_car_psd_2027/*.png
+!_3_StandardSim/generated_results/quarter_car_psd_2027/*.pdf
+!_3_StandardSim/generated_results/quarter_car_psd_2027/*.csv
+!_3_StandardSim/generated_results/quarter_car_psd_2027/*.json
+!_3_StandardSim/generated_results/quarter_car_grip_2027/
+!_3_StandardSim/generated_results/quarter_car_grip_2027/*.png
+!_3_StandardSim/generated_results/quarter_car_grip_2027/*.pdf
+!_3_StandardSim/generated_results/quarter_car_grip_2027/*.csv
+!_3_StandardSim/generated_results/quarter_car_grip_2027/*.json
 _3_StandardSim/results/**
 !_3_StandardSim/results/
 !_3_StandardSim/results/.gitkeep

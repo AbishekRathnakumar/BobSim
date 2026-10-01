@@ -1,0 +1,5 @@
+{
+  "mode": "plot-only refresh; simulation provenance remains in summary.json",
+  "plot_runner_sha256": "dec471188747bb263255980fbe63010ee15ef67d5b0c72dbaffe68f64a9317ca",
+  "grip_csv_sha256": "1d49dd82d1ffffc369d2ea47505a84a4504def206141651d209f2e3511fc3f46"
+}

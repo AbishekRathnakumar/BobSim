@@ -1,0 +1,25 @@
+{
+  "focused_tests": {"command": "docker compose run --rm -T bobsim make quarter-car-grip-test", "passed": 13, "failed": 0, "duration_s": 2.03},
+  "targeted_ruff": "passed on final source and focused tests",
+  "targeted_mypy": "passed on final three study source files",
+  "records": 8688,
+  "supported_records": 1455,
+  "sampled_load_departures": 7233,
+  "unresolved_bounds": 0,
+  "supported_summary_rows": 435,
+  "max_psd_rms_relative_error": 1.1845532222758841e-6,
+  "max_force_sampling_relative_error": 3.136300032432147e-16,
+  "plots": "Ten PNG/PDF pairs generated; final A/B and unsupported ISO C visually inspected; all linear axes",
+  "provenance": "Simulation sources in source_snapshot and summary.json; final plot-only runner and data hashes in plot_manifest.json",
+  "full_standard_modelica_regression": {
+    "command": "docker compose run --rm -T bobsim make regression-baseline",
+    "passed": 15,
+    "failed": 2,
+    "duration_s": 391.94,
+    "failures": [
+      {"workflow": "ramp_steer", "metric": "steer_excess_fit_nrmse", "observed": 0.18652926851924925, "expected": 0.0876623086560855, "tolerance": 0.08},
+      {"workflow": "steady_state", "metric": "n_cases", "observed": 22, "expected": 40, "tolerance": 0}
+    ],
+    "scope": "Same baseline mismatches as before the grip implementation. Separate default full-car workflows; causes not investigated and no baseline changed."
+  }
+}

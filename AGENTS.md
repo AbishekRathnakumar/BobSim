@@ -40,10 +40,14 @@ above. Keep the set small; a stale doc is worse than no doc.
   `_5_App` is the browser entry point. Lower layers must not import from higher
   ones. Reuse `_0_Utils/plotting` and `_0_Utils/reporting` rather than calling
   matplotlib or building PDFs directly in a study.
-- **Never commit generated content.** `Build/`, `BuildBobLib/`, `results/`,
+- **Commit study plots and CSVs when publishing study work.** The owner explicitly
+  requested these in Git for future reference (2026-10-01). Include relevant
+  summaries and validation metadata; use narrow ignore exceptions for each study.
+  Do not omit these deliverables merely because they are generated.
+- **Keep other generated content out of Git.** `Build/`, `BuildBobLib/`, `results/`,
   `generated_results/`, `population/`, `_5_App/user_data/`, and deploy outputs
   (`.exe`, `.app`, `.zip`, `.tar.gz`) are runtime artifacts. They are gitignored;
-  keep it that way.
+  keep them ignored except for the study deliverables above.
 - **Never hand-edit generated Modelica records.** `BobLib/Records/VehicleDefn/*.mo`
   are written by `_5_App/modelica_generator.py`. Change `vehicle.yml` or the
   generator.

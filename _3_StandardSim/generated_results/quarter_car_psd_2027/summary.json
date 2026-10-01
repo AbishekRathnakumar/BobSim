@@ -1,0 +1,63 @@
+{
+  "config": {
+    "vehicle": "2027.yml",
+    "speed_mps": 15.0,
+    "wheelrate_min_n_per_m": 5000.0,
+    "wheelrate_max_n_per_m": 50000.0,
+    "wheelrate_points": 181,
+    "damping_ratio": 0.7,
+    "spatial_frequency_min_cycles_per_m": 0.01,
+    "spatial_frequency_max_cycles_per_m": 10.0,
+    "frequency_points": 8193,
+    "iso_classes": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+      "F",
+      "G",
+      "H"
+    ],
+    "contact_loss_probability_limit": 0.01,
+    "output": "_3_StandardSim/generated_results/quarter_car_psd_2027"
+  },
+  "mass_projection": {
+    "total_mass_kg": 271.2482372600001,
+    "front_weight_fraction": 0.4500000000000002,
+    "cg_m": [
+      -0.8521699999999998,
+      0.0,
+      0.29209999999999975
+    ],
+    "wheelbase_m": 1.5494
+  },
+  "corners": [
+    {
+      "axle": "front",
+      "sprung_mass_kg": 53.31978309350005,
+      "unsprung_mass_kg": 7.71107029,
+      "tire_stiffness_n_per_m": 98946.66191425915,
+      "tire_damping_ns_per_m": 115.844,
+      "mean_load_n": 598.5082183333008
+    },
+    {
+      "axle": "rear",
+      "sprung_mass_kg": 66.88219495650002,
+      "unsprung_mass_kg": 7.71107029,
+      "tire_stiffness_n_per_m": 98946.66191425915,
+      "tire_damping_ns_per_m": 115.844,
+      "mean_load_n": 731.5100446295893
+    }
+  ],
+  "row_count": 2896,
+  "maximum_integration_relative_error": 7.095392418561299e-13,
+  "source_sha256": {
+    "2027.yml": "e2cc96490d0443e46e8b1f5ab59f39535e4e90daea11006c47d2e0ffb84a53ba",
+    "_3_StandardSim/QuarterCarPSD/quarter_car_psd_config.yml": "7cb3d1d715468753cc9e6910fa5ce1d66024b5883834d0719b492e0586edbc70",
+    "_3_StandardSim/QuarterCarPSD/quarter_car_psd.py": "bd1ce0e1cddf73cc8bd8787ffda3447c313e5b8940067d5815261eaf81298f25",
+    "_0_Utils/dyn_py/parameters.py": "2b02149f698d348a172a3d43bfc0c3fc6b28a35017bad70f28e1466ed5f6fc48"
+  },
+  "iso_source": "https://www.iso.org/standard/71202.html",
+  "scope": "Linear 2DOF frequency-domain QCM; static gravity mean load; no aero, roll, pitch, bump stops, travel constraints, tire enveloping or unilateral contact. Not a grip or full-vehicle optimum prediction."
+}

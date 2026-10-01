@@ -1,0 +1,55 @@
+{
+  "config": {
+    "qcm_config": "_3_StandardSim/QuarterCarPSD/quarter_car_psd_config.yml",
+    "duration_s": 64,
+    "sample_rate_hz": 2400,
+    "seeds": [
+      2027,
+      2028,
+      2029
+    ],
+    "slip_grid_points": 121,
+    "histogram_bins": 256,
+    "output": "_3_StandardSim/generated_results/quarter_car_grip_2027"
+  },
+  "qcm_config": {
+    "vehicle": "2027.yml",
+    "speed_mps": 15.0,
+    "wheelrate_min_n_per_m": 5000.0,
+    "wheelrate_max_n_per_m": 50000.0,
+    "wheelrate_points": 181,
+    "damping_ratio": 0.7,
+    "spatial_frequency_min_cycles_per_m": 0.01,
+    "spatial_frequency_max_cycles_per_m": 10.0,
+    "frequency_points": 8193,
+    "iso_classes": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+      "F",
+      "G",
+      "H"
+    ],
+    "contact_loss_probability_limit": 0.01,
+    "output": "_3_StandardSim/generated_results/quarter_car_psd_2027"
+  },
+  "records": 8688,
+  "sweep_rows": 2896,
+  "supported_records": 1455,
+  "supported_sweep_rows": 435,
+  "max_psd_rms_relative_error": 1.1845532222758841e-06,
+  "max_force_sampling_relative_error": 3.136300032432147e-16,
+  "source_sha256": {
+    "_3_StandardSim/QuarterCarPSD/grip_config.yml": "f087599982ab7fb1797330d0999e74878db4ba1363b4b4076adb7090870253eb",
+    "_3_StandardSim/QuarterCarPSD/quarter_car_psd_config.yml": "7cb3d1d715468753cc9e6910fa5ce1d66024b5883834d0719b492e0586edbc70",
+    "2027.yml": "e2cc96490d0443e46e8b1f5ab59f39535e4e90daea11006c47d2e0ffb84a53ba",
+    "_3_StandardSim/QuarterCarPSD/grip_sweep.py": "5a2aac7c56ad966676d320cf21c787f9c8e858ce5ad632aa23b56015aaa3ef11",
+    "_0_Utils/mf52_lateral.py": "8ccde6b9fc62dca4ed211b93d5598efd662e92cb9afd31db606f14c285175126",
+    "_3_StandardSim/QuarterCarPSD/quarter_car_psd.py": "bd1ce0e1cddf73cc8bd8787ffda3447c313e5b8940067d5815261eaf81298f25",
+    "_0_Utils/dyn_py/parameters.py": "2b02149f698d348a172a3d43bfc0c3fc6b28a35017bad70f28e1466ed5f6fc48",
+    "_0_Utils/tire_templates/16x7p5_10_12psi.tir": "328b9666c71a164685d7429ef00517fbe0a6f15d3f5d031714bae4ce642bc7b1"
+  },
+  "scope": "Finite periodic records; pure lateral +Fy capacity at one optimized fixed slip angle per record; zero camber, no tire relaxation, aero or anti. Strict continuous-record load-bound screen. Unsupported records withheld. Seed range is not a statistical confidence interval."
+}
